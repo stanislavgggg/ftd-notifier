@@ -44,14 +44,14 @@ def post_daily_summary(date: str):
     brands = store.top_brands(date, date, 1)
 
     lines = [f"📅 *Day recap — {date}*",
-             f"Total: *{int(tot['ftd'])} FTD* · {util.eur(tot['deposit_value'])}"]
+             f"Total: *{int(tot['ftd'])} FTD* · {int(tot['signups'])} signups"]
     if sources:
         lines.append("")
         for s in sources:
-            lines.append(f"• *{s['site_label']}* — {int(s['ftd'])} FTD · {util.eur(s['deposit_value'])}")
+            lines.append(f"• *{s['site_label']}* — {int(s['ftd'])} FTD · {int(s['signups'])} signups")
     if brands and brands[0]["ftd"]:
         b = brands[0]
-        lines.append(f"\n👑 Brand of the day: *{b['brand']}* — {int(b['ftd'])} FTD · {util.eur(b['deposit_value'])}")
+        lines.append(f"\n👑 Brand of the day: *{b['brand']}* — {int(b['ftd'])} FTD · {int(b['signups'])} signups")
 
     text = f"Day recap {date}: {int(tot['ftd'])} FTD"
     _post_raw(text, [{"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}}])
