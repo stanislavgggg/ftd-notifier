@@ -43,6 +43,17 @@ SITES = _parse_sites(os.environ.get("SITES", "82:MAIL,29:META"))
 # sources are picked up without editing SITES. Falls back to SITES on failure.
 AUTO_DISCOVER_SITES = _bool("AUTO_DISCOVER_SITES", True)
 
+# --- Tracker (campaign-level) scraping --------------------------------------
+# Sites to also scrape at campaign/tracker level via the deep L1→L2→L3 drilldown
+# (site → advertiser → login → campaign). Empty = tracker feature OFF. This is
+# MUCH heavier than brand scraping (~150 requests/day per site), so it runs on
+# its own slow cadence, never on the 5-minute poll.
+TRACKER_SITES = _parse_sites(os.environ.get("TRACKER_SITES", "82:MAIL"))
+# One-time deep history for trackers (resumable, chunked). Keep modest.
+TRACKER_BACKFILL_DAYS = int(os.environ.get("TRACKER_BACKFILL_DAYS", "45"))
+# How often to refresh today's + yesterday's trackers (hours). Not every poll.
+TRACKER_REFRESH_HOURS = float(os.environ.get("TRACKER_REFRESH_HOURS", "6"))
+
 # --- Cadence -----------------------------------------------------------------
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "900"))   # 15 min
 # Also re-check yesterday so late-settling FTDs still fire a notification.
