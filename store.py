@@ -43,12 +43,18 @@ def conn() -> sqlite3.Connection:
                 site_label    TEXT NOT NULL,
                 brand         TEXT NOT NULL,
                 ftd           INTEGER NOT NULL DEFAULT 0,
+                signups       INTEGER NOT NULL DEFAULT 0,
                 deposits      INTEGER NOT NULL DEFAULT 0,
                 deposit_value REAL    NOT NULL DEFAULT 0,
                 updated_at    TEXT,
                 PRIMARY KEY (date, site_id, brand)
             )
         """)
+        # Migrate DBs created before `signups` existed (no-op if already present).
+        try:
+            _conn.execute("ALTER TABLE brand_daily ADD COLUMN signups INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_bd_date ON brand_daily(date)")
         _conn.commit()
     return _conn
@@ -64,11 +70,12 @@ def upsert_rows(rows: list[dict]):
         c = conn()
         c.executemany("""
             INSERT INTO brand_daily
-              (date, site_id, site_label, brand, ftd, deposits, deposit_value, updated_at)
-            VALUES (:date, :site_id, :site_label, :brand, :ftd, :deposits, :deposit_value, :now)
+              (date, site_id, site_label, brand, ftd, signups, deposits, deposit_value, updated_at)
+            VALUES (:date, :site_id, :site_label, :brand, :ftd, :signups, :deposits, :deposit_value, :now)
             ON CONFLICT(date, site_id, brand) DO UPDATE SET
               site_label    = excluded.site_label,
               ftd           = excluded.ftd,
+              signups       = excluded.signups,
               deposits      = excluded.deposits,
               deposit_value = excluded.deposit_value,
               updated_at    = excluded.updated_at
@@ -82,6 +89,7 @@ def totals_by_source(start: str, end: str) -> list[dict]:
     cur = c.execute("""
         SELECT site_label,
                SUM(ftd)           AS ftd,
+               SUM(signups)       AS signups,
                SUM(deposit_value) AS deposit_value
         FROM brand_daily
         WHERE date BETWEEN ? AND ?
@@ -97,12 +105,13 @@ def top_brands(start: str, end: str, limit: int = 10) -> list[dict]:
         SELECT brand,
                MAX(site_label)    AS site_label,
                SUM(ftd)           AS ftd,
+               SUM(signups)       AS signups,
                SUM(deposit_value) AS deposit_value
         FROM brand_daily
         WHERE date BETWEEN ? AND ?
         GROUP BY brand
         HAVING ftd > 0
-        ORDER BY ftd DESC, deposit_value DESC
+        ORDER BY ftd DESC, signups DESC
         LIMIT ?
     """, (start, end, limit))
     return [dict(r) for r in cur.fetchall()]
@@ -112,6 +121,7 @@ def grand_total(start: str, end: str) -> dict:
     c = conn()
     r = c.execute("""
         SELECT IFNULL(SUM(ftd), 0)           AS ftd,
+               IFNULL(SUM(signups), 0)       AS signups,
                IFNULL(SUM(deposit_value), 0) AS deposit_value
         FROM brand_daily
         WHERE date BETWEEN ? AND ?
