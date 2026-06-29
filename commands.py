@@ -37,7 +37,7 @@ def _sources_lines(start: str, end: str) -> str:
         return "_no data for this period yet_"
     out = []
     for r in rows:
-        out.append(f"• *{r['site_label']}* — {int(r['ftd'])} FTD · {util.eur(r['deposit_value'])}")
+        out.append(f"• *{r['site_label']}* — {int(r['ftd'])} FTD · {int(r['signups'])} signups")
     return "\n".join(out)
 
 
@@ -49,13 +49,13 @@ def _brands_lines(start: str, end: str, limit: int = 10) -> str:
     out = []
     for i, r in enumerate(rows):
         tag = medals[i] if i < 3 else f"{i+1}."
-        out.append(f"{tag} *{r['brand']}* ({r['site_label']}) — {int(r['ftd'])} FTD · {util.eur(r['deposit_value'])}")
+        out.append(f"{tag} *{r['brand']}* ({r['site_label']}) — {int(r['ftd'])} FTD · {int(r['signups'])} signups")
     return "\n".join(out)
 
 
 def _overview(start: str, end: str, label: str) -> list[dict]:
     tot = store.grand_total(start, end)
-    header = f"📊 *FTD — {label}*\nTotal: *{int(tot['ftd'])} FTD* · {util.eur(tot['deposit_value'])}"
+    header = f"📊 *FTD — {label}*\nTotal: *{int(tot['ftd'])} FTD* · {int(tot['signups'])} signups"
     return [
         _section(header),
         _section("*By source*\n" + _sources_lines(start, end)),
