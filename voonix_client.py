@@ -270,6 +270,130 @@ async def _discover_sites(page, date_str: str) -> list[tuple[str, str]]:
     return [(sid, name) for sid, name in found.items()]
 
 
+def _ts_params(site_id: str, adve_id: str | None, login_id: str | None, date_str: str) -> str:
+    s = f"?p=siteearnings&start={date_str}&end={date_str}&site={site_id}"
+    if adve_id:
+        s += f"&adve={adve_id}"
+    if login_id:
+        s += f"&login={login_id}"
+    return s + "&&submit"
+
+
+async def _get_link_ids(page, params: str, key: str) -> list[tuple[str, str]]:
+    """Extract (id, name) for every table-row link carrying `key`=<digits>
+    (key is 'adve' or 'login'). Selectors mirror the proven statparser flow."""
+    await _navigate(page, params)
+    js = (
+        "() => { const out=[]; "
+        "document.querySelectorAll('table tbody tr').forEach(row => { "
+        "const a = row.querySelector('a[href*=\"KEY=\"]'); "
+        "if (a) { const m = a.href.match(/[?&]KEY=(\\d+)/); "
+        "if (m) out.push({id:m[1], name:(a.textContent||'').trim()}); } }); "
+        "return out; }"
+    ).replace("KEY", key)
+    found = await page.evaluate(js)
+    return [(x["id"], x["name"]) for x in found]
+
+
+async def _download_csv(page, params: str) -> tuple[list[str], list[list[str]]] | None:
+    """Navigate to `params` and download its CSV. Returns (header, rows) or None.
+    Never raises on transient errors so one bad node can't kill a long run."""
+    path = f"{DOWNLOAD_DIR}/lvl.csv"
+    for attempt in range(3):
+        try:
+            await _navigate(page, params)
+            await page.wait_for_selector("a.buttons-csv, button.buttons-csv", timeout=20000)
+            async with page.expect_download(timeout=30000) as dl:
+                await page.evaluate(
+                    "() => document.querySelector('a.buttons-csv, button.buttons-csv')"
+                    ".dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true}))"
+                )
+            download = await dl.value
+            await download.save_as(path)
+            with open(path, newline="", encoding="utf-8") as f:
+                rows = list(csv.reader(f))
+            return (rows[0], rows[1:]) if rows else None
+        except Exception:
+            await page.wait_for_timeout(2500)
+    return None
+
+
+async def _open_logged_in(p, probe_date: str):
+    """Launch a browser, restore the saved session (or log in), return handles."""
+    state_path = _state_file()
+    have_state = os.path.exists(state_path)
+    browser = await p.chromium.launch(
+        headless=config.HEADLESS, args=["--no-sandbox", "--disable-setuid-sandbox"]
+    )
+    ctx_kwargs = dict(
+        accept_downloads=True,
+        viewport={"width": 1280, "height": 900},
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    )
+    if have_state:
+        ctx_kwargs["storage_state"] = state_path
+    context = await browser.new_context(**ctx_kwargs)
+    page = await context.new_page()
+    page.set_default_timeout(60000)
+    await _navigate(page, f"?p=siteearnings&start={probe_date}&end={probe_date}&&submit")
+    try:
+        await page.wait_for_selector(
+            'a.buttons-csv, button.buttons-csv, input[name="password"]', timeout=25000
+        )
+    except Exception:
+        pass
+    if await page.query_selector('input[name="password"]'):
+        print("🔓 No active session — logging in.")
+        await _full_login(page)
+        try:
+            await context.storage_state(path=state_path)
+        except Exception as e:
+            print(f"   ⚠️ Could not save session state: {e}")
+    else:
+        print("🔑 Existing session is valid — skipping login.")
+    return browser, context, page, state_path
+
+
+async def scrape_trackers_once(dates: list[str] | None = None,
+                               sites: list[tuple[str, str]] | None = None) -> list[dict]:
+    """Deep campaign-level scrape: for each tracker-site and day, walk
+    advertisers → logins → campaigns and return campaign rows.
+    Each item: {date, site_id, site_label, campaign, ftd, signups, deposits, deposit_value}.
+    This is heavy (~150 requests/day per site) — call it on a slow cadence only."""
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    dates = dates or utc_dates(config.LOOKBACK_DAYS)
+    sites = sites if sites is not None else config.TRACKER_SITES
+    if not sites:
+        return []
+    results: list[dict] = []
+    async with async_playwright() as p:
+        browser, context, page, state_path = await _open_logged_in(p, dates[0])
+        for site_id, site_label in sites:
+            for date_str in dates:
+                adve_list = await _get_link_ids(page, _ts_params(site_id, None, None, date_str), "adve")
+                for adve_id, _ in adve_list:
+                    login_list = await _get_link_ids(
+                        page, _ts_params(site_id, adve_id, None, date_str), "login")
+                    for login_id, _ in login_list:
+                        got = await _download_csv(
+                            page, _ts_params(site_id, adve_id, login_id, date_str))
+                        if not got:
+                            continue
+                        header, rows = got
+                        for r in _parse_brand_rows(header, rows):  # row[0] = campaign name
+                            results.append({
+                                "date": date_str, "site_id": site_id, "site_label": site_label,
+                                "campaign": r["brand"], "ftd": r["ftd"], "signups": r["signups"],
+                                "deposits": r["deposits"], "deposit_value": r["deposit_value"],
+                            })
+        try:
+            await context.storage_state(path=state_path)
+        except Exception:
+            pass
+        await browser.close()
+    return results
+
+
 async def scrape_once(dates: list[str] | None = None) -> list[dict]:
     """One poll: for every configured site and lookback day, return brand rows.
     Each item: {date, site_id, site_label, brand, ftd, deposits, deposit_value}.
