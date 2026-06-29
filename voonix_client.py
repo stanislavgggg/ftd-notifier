@@ -159,13 +159,16 @@ async def _download_l1_csv(page, site_id: str, date_str: str) -> tuple[list[str]
     """Download the L1 (per-advertiser) earnings CSV for one site+day."""
     params = f"?p=siteearnings&start={date_str}&end={date_str}&site={site_id}&&submit"
     path = f"{DOWNLOAD_DIR}/l1_{site_id}_{date_str}.csv"
+    # Voonix renders the CSV button as <a class="buttons-csv …"> — we accept any
+    # element whose class list contains "buttons-csv" (DataTables standard class).
+    CSV_SELECTOR = "a.buttons-csv, button.buttons-csv"
     for attempt in range(3):
         try:
             await _navigate(page, params)
-            await page.wait_for_selector("a.buttons-csv", timeout=20000)
+            await page.wait_for_selector(CSV_SELECTOR, timeout=20000)
             async with page.expect_download(timeout=30000) as dl:
                 await page.evaluate(
-                    "() => document.querySelector('a.buttons-csv')"
+                    f"() => document.querySelector('{CSV_SELECTOR}')"
                     ".dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true}))"
                 )
             download = await dl.value
@@ -178,6 +181,24 @@ async def _download_l1_csv(page, site_id: str, date_str: str) -> tuple[list[str]
         except Exception as e:
             print(f"   ⚠️ L1 retry {attempt+1}/3 (site={site_id} {date_str}): {e}")
             await page.wait_for_timeout(2500)
+    # Final failure — dump page HTML so we can see what Voonix actually showed.
+    try:
+        html = await page.content()
+        dump = f"{DOWNLOAD_DIR}/debug_{site_id}_{date_str}.html"
+        with open(dump, "w", encoding="utf-8") as f:
+            f.write(html)
+        # Print a compact diagnostic: title + all button/link texts on the page.
+        title = await page.title()
+        btns = await page.evaluate(
+            "() => [...document.querySelectorAll('a,button')].map(e=>e.className+' | '+e.innerText.trim()).filter(t=>t.length<120)"
+        )
+        print(f"   🔍 Page title: '{title}'")
+        print(f"   🔍 Buttons/links on page ({len(btns)} total):")
+        for b in btns[:30]:
+            print(f"       {b}")
+        print(f"   🔍 Full HTML saved to {dump}")
+    except Exception as de:
+        print(f"   🔍 Debug dump failed: {de}")
     print(f"   ❌ No L1 CSV (site={site_id} {date_str})")
     return None
 
