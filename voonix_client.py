@@ -239,6 +239,37 @@ def _parse_brand_rows(header: list[str], rows: list[list[str]]) -> list[dict]:
     return out
 
 
+async def _discover_sites(page, date_str: str) -> list[tuple[str, str]]:
+    """Read every site (id + display name) from the all-sites earnings table.
+
+    The site names are links carrying `?...&site=<id>`. We scan them, dedupe by
+    id and drop numeric-only labels, so new traffic sources are picked up
+    automatically without anyone editing the SITES env var.
+    """
+    await _navigate(page, f"?p=siteearnings&start={date_str}&end={date_str}&&submit")
+    try:
+        await page.wait_for_selector("a.buttons-csv, table tbody tr", timeout=20000)
+    except Exception:
+        pass
+    found = await page.evaluate(
+        """
+        () => {
+            const out = {};
+            document.querySelectorAll('a[href*="site="]').forEach(a => {
+                const m = a.href.match(/[?&]site=(\\d+)/);
+                const name = (a.textContent || '').trim();
+                // Skip drilldown links (they also carry adve=/login=) and blanks.
+                if (m && name && !/[?&](adve|login)=/.test(a.href) && !/^\\d+$/.test(name)) {
+                    out[m[1]] = name;
+                }
+            });
+            return out;
+        }
+        """
+    )
+    return [(sid, name) for sid, name in found.items()]
+
+
 async def scrape_once(dates: list[str] | None = None) -> list[dict]:
     """One poll: for every configured site and lookback day, return brand rows.
     Each item: {date, site_id, site_label, brand, ftd, deposits, deposit_value}.
@@ -265,13 +296,12 @@ async def scrape_once(dates: list[str] | None = None) -> list[dict]:
         page = await context.new_page()
         page.set_default_timeout(60000)
 
-        # Establish a logged-in session. Navigate to the first data page, then
-        # wait for EITHER the CSV export button (already authenticated) OR the
+        # Establish a logged-in session. Navigate to the all-sites earnings page,
+        # then wait for EITHER the CSV export button (already authenticated) OR the
         # login form's password field (session dead / first run). This removes a
         # redirect race where the old probe was checked before Voonix finished
         # bouncing us to the login page, which silently skipped the login.
-        first_site = config.SITES[0][0]
-        probe = f"?p=siteearnings&start={dates[0]}&end={dates[0]}&site={first_site}&&submit"
+        probe = f"?p=siteearnings&start={dates[0]}&end={dates[0]}&&submit"
         await _navigate(page, probe)
         try:
             await page.wait_for_selector(
@@ -290,7 +320,25 @@ async def scrape_once(dates: list[str] | None = None) -> list[dict]:
         else:
             print("🔑 Existing session is valid — skipping login.")
 
-        for site_id, site_label in config.SITES:
+        # Decide which sites to scrape. By default, auto-discover EVERY site from
+        # the all-sites table so new traffic sources are picked up without editing
+        # SITES. Fall back to the configured list if discovery fails or looks wrong.
+        sites = config.SITES
+        if config.AUTO_DISCOVER_SITES:
+            try:
+                discovered = await _discover_sites(page, dates[0])
+                configured_ids = {sid for sid, _ in config.SITES}
+                discovered_ids = {sid for sid, _ in discovered}
+                if discovered and configured_ids.issubset(discovered_ids):
+                    sites = discovered
+                    print(f"🧭 Auto-discovered {len(sites)} sites: {[s[1] for s in sites]}")
+                else:
+                    print(f"🧭 Discovery found {sorted(discovered_ids)} but it's missing "
+                          f"configured {sorted(configured_ids)} — using SITES instead.")
+            except Exception as e:
+                print(f"🧭 Auto-discover failed ({e}) — using configured SITES.")
+
+        for site_id, site_label in sites:
             for date_str in dates:
                 got = await _download_l1_csv(page, site_id, date_str)
                 if not got:
