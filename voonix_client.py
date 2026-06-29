@@ -280,19 +280,51 @@ def _ts_params(site_id: str, adve_id: str | None, login_id: str | None, date_str
 
 
 async def _get_link_ids(page, params: str, key: str) -> list[tuple[str, str]]:
-    """Extract (id, name) for every table-row link carrying `key`=<digits>
-    (key is 'adve' or 'login'). Selectors mirror the proven statparser flow."""
+    """Extract unique (id, name) for every link carrying `key`=<digits>
+    (key is 'adve' or 'login'). Waits for DataTables to finish rendering, then
+    scans ALL anchors on the page. Logs a diagnostic line when it finds nothing,
+    so the deploy logs reveal whether it's a render/timing or a selector issue."""
     await _navigate(page, params)
-    js = (
-        "() => { const out=[]; "
-        "document.querySelectorAll('table tbody tr').forEach(row => { "
-        "const a = row.querySelector('a[href*=\"KEY=\"]'); "
-        "if (a) { const m = a.href.match(/[?&]KEY=(\\d+)/); "
-        "if (m) out.push({id:m[1], name:(a.textContent||'').trim()}); } }); "
-        "return out; }"
-    ).replace("KEY", key)
-    found = await page.evaluate(js)
-    return [(x["id"], x["name"]) for x in found]
+    # The table (and its CSV button) is injected by DataTables AFTER load, so an
+    # immediate query can see an empty tbody. Wait for the button to appear.
+    try:
+        await page.wait_for_selector("a.buttons-csv, button.buttons-csv", timeout=20000)
+    except Exception:
+        pass
+    info = await page.evaluate(
+        """
+        (key) => {
+            const re = new RegExp('[?&]' + key + '=(\\\\d+)');
+            const ids = [];
+            const sample = [];
+            document.querySelectorAll('a').forEach(a => {
+                const href = a.href || '';
+                const m = href.match(re);
+                if (m) ids.push({id: m[1], name: (a.textContent || '').trim()});
+                else if (href.indexOf('siteearnings') !== -1 && sample.length < 6)
+                    sample.push(href);
+            });
+            return {
+                rows: document.querySelectorAll('table tbody tr').length,
+                anchors: document.querySelectorAll('a').length,
+                ids: ids,
+                sample: sample,
+            };
+        }
+        """,
+        key,
+    )
+    seen, out = set(), []
+    for x in info["ids"]:
+        if x["id"] not in seen:
+            seen.add(x["id"])
+            out.append((x["id"], x["name"]))
+    if not out:
+        print(f"      ⚠️ {key}: 0 links (tbody rows={info['rows']}, "
+              f"anchors={info['anchors']}) :: {params}")
+        for h in info.get("sample", []):
+            print(f"         sample href: {h}")
+    return out
 
 
 async def _download_csv(page, params: str) -> tuple[list[str], list[list[str]]] | None:
@@ -371,6 +403,7 @@ async def scrape_trackers_once(dates: list[str] | None = None,
         for site_id, site_label in sites:
             for date_str in dates:
                 adve_list = await _get_link_ids(page, _ts_params(site_id, None, None, date_str), "adve")
+                print(f"   📅 {date_str} {site_label}: {len(adve_list)} advertisers")
                 for adve_id, _ in adve_list:
                     login_list = await _get_link_ids(
                         page, _ts_params(site_id, adve_id, None, date_str), "login")
