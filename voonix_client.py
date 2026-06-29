@@ -144,7 +144,10 @@ async def _full_login(page):
 
 
 async def _navigate(page, params: str):
-    await page.evaluate(f"window.location.href = '/{params}'")
+    # Absolute URL — a relative '/?...' can't be resolved when the page is still
+    # on about:blank (first probe before login), which threw a DOMException.
+    url = config.BASE_URL.rstrip("/") + "/" + params.lstrip("/")
+    await page.evaluate("(u) => { window.location.href = u; }", url)
     try:
         await page.wait_for_load_state("domcontentloaded", timeout=30000)
     except Exception:
