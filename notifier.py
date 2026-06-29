@@ -1,32 +1,35 @@
 """
-FTD → Slack notifier — main worker.
+FTD → Slack notifier — main process.
 
-Loop:
-  1. Scrape per-brand FTD counts for every configured site (today + yesterday).
-  2. Compare each (date, site, brand) count to what we saw last cycle.
-  3. For any increase, post a FOMO message to Slack (and mirror to BigQuery).
-  4. Sleep, repeat.
+Runs two things in one service:
+  1. A background poll loop that scrapes Voonix, posts new-FTD pings, keeps the
+     SQLite store current, and posts the daily recap / record pings.
+  2. A FastAPI server (server.py) that answers Slack slash commands from that
+     same store.
 
 Counter, not events:
   Voonix reports a *cumulative daily* FTD count per brand. A rise from N to N+k
-  means k new FTDs since the last poll. Keying state by (date, site, brand)
-  makes midnight rollover safe (a new day starts at its own 0) and lets a late
-  FTD on yesterday still fire (settle-lag).
+  means k new FTDs since the last poll. State is keyed by (date, site, brand) so
+  midnight rollover is safe and a late FTD on yesterday still fires.
 
 First cycle = silent baseline:
-  On boot we record current counts WITHOUT notifying, so a restart never
-  replays the whole day. Only rises observed *after* the baseline ping Slack.
+  On boot we record current counts WITHOUT notifying, so a restart never replays
+  the day. Only rises observed *after* the baseline ping Slack. (The store is
+  still updated on the baseline cycle, so commands have data immediately.)
 """
+import threading
 import time
 from datetime import datetime, timezone
 
 import config
 import slack
+import store
+import summary
 import voonix_client
 
 try:
     import bq_mirror
-except Exception:  # google libs optional unless BQ_MIRROR=true
+except Exception:
     bq_mirror = None
 
 # (date, site_id, brand) -> {"ftd": int, "deposit_value": float}
@@ -46,6 +49,12 @@ def _day_totals(rows: list[dict], date: str, site_id: str) -> tuple[int, float]:
 
 def process(rows: list[dict]):
     global _baselined
+
+    # Always keep the store current so /ftd commands work from cycle one.
+    store.upsert_rows(rows)
+
+    now = datetime.now(timezone.utc)
+
     if not _baselined:
         for r in rows:
             _seen[_key(r)] = {"ftd": r["ftd"], "deposit_value": r["deposit_value"]}
@@ -68,7 +77,7 @@ def process(rows: list[dict]):
             day_ftd, day_dep = _day_totals(rows, r["date"], r["site_id"])
 
             ev = {
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": now.isoformat(),
                 "date": r["date"],
                 "site_id": r["site_id"],
                 "site_label": r["site_label"],
@@ -79,7 +88,6 @@ def process(rows: list[dict]):
                 "day_deposit": round(day_dep, 2),
             }
 
-            # Optional noise gate: skip €0 deposit FTDs if a floor is set.
             if config.MIN_DEPOSIT_EUR > 0 and deposit_delta < config.MIN_DEPOSIT_EUR:
                 pass
             else:
@@ -88,9 +96,11 @@ def process(rows: list[dict]):
                 if bq_mirror:
                     bq_mirror.record(ev)
 
-        # Always advance state (even on a downward correction) so the next real
-        # rise is measured from the correct base.
         _seen[k] = {"ftd": r["ftd"], "deposit_value": r["deposit_value"]}
+
+    # FOMO extras (both no-op unless enabled / past the configured hour).
+    summary.check_records(rows, now)
+    summary.maybe_post_daily_summary(now)
 
     print(f"   ↳ cycle done: {len(rows)} brand-days scanned, {notifications} notification(s) sent")
 
@@ -106,6 +116,41 @@ def one_cycle():
     process(rows)
 
 
+def backfill():
+    """One-time history seed so week/month commands aren't empty at launch."""
+    if config.BACKFILL_DAYS <= 0:
+        return
+    import asyncio
+    from datetime import timedelta
+    today = datetime.now(timezone.utc).date()
+    target_oldest = (today - timedelta(days=config.BACKFILL_DAYS)).isoformat()
+    have = store.earliest_date()
+    if have and have <= target_oldest:
+        print(f"↩️  Backfill skipped (store already has data back to {have})")
+        return
+    dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d")
+             for i in range(config.BACKFILL_DAYS)]
+    print(f"⏳ Backfilling {len(dates)} days into the store ({dates[-1]} … {dates[0]})...")
+    try:
+        rows = asyncio.run(voonix_client.scrape_once(dates=dates))
+        store.upsert_rows(rows)
+        print(f"✅ Backfill done: {len(rows)} brand-days stored")
+    except Exception as e:
+        print(f"⚠️ Backfill failed (non-fatal): {e}")
+
+
+def poll_loop():
+    backfill()
+    while True:
+        try:
+            one_cycle()
+        except Exception as e:
+            print(f"❌ Cycle error (will retry next interval): {e}")
+        if config.RUN_ONCE:
+            return
+        time.sleep(config.POLL_INTERVAL_SECONDS)
+
+
 def main():
     print("=" * 60)
     print("FTD → Slack notifier starting")
@@ -113,19 +158,22 @@ def main():
     print(f"  interval: {config.POLL_INTERVAL_SECONDS}s   lookback: {config.LOOKBACK_DAYS}d")
     print(f"  slack:    {'webhook' if config.SLACK_WEBHOOK_URL else ('bot-token' if config.SLACK_BOT_TOKEN else 'NONE')}"
           f"{'  (DRY_RUN)' if config.DRY_RUN else ''}")
+    print(f"  commands: {'ON (signing secret set)' if config.SLACK_SIGNING_SECRET else 'off (no signing secret)'}")
+    print(f"  daily recap: {'hour '+str(config.DAILY_SUMMARY_HOUR_UTC)+' UTC' if config.DAILY_SUMMARY_HOUR_UTC>=0 else 'off'}"
+          f"   records: {'on' if config.ENABLE_RECORDS else 'off'}")
     print(f"  bq mirror:{'on' if (config.BQ_MIRROR and bq_mirror) else 'off'}")
     print("=" * 60)
 
     if config.RUN_ONCE:
-        one_cycle()
+        poll_loop()
         return
 
-    while True:
-        try:
-            one_cycle()
-        except Exception as e:
-            print(f"❌ Cycle error (will retry next interval): {e}")
-        time.sleep(config.POLL_INTERVAL_SECONDS)
+    # Poll in the background; serve slash commands in the foreground.
+    threading.Thread(target=poll_loop, daemon=True).start()
+
+    import uvicorn
+    from server import app
+    uvicorn.run(app, host="0.0.0.0", port=config.PORT, log_level="warning")
 
 
 if __name__ == "__main__":

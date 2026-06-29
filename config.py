@@ -86,6 +86,25 @@ except Exception:
     BUYER_MAP = {}
 
 
+# --- Slash commands + web server ---------------------------------------------
+# Signing Secret from the Slack app's Basic Information page. Required for
+# /ftd commands (without it the command endpoint rejects everything).
+SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "").strip()
+PORT = int(os.environ.get("PORT", "8080"))           # Railway sets PORT
+# "in_channel" = command replies are visible to everyone (FOMO); "ephemeral" =
+# only the person who typed it sees the reply.
+COMMAND_RESPONSE_TYPE = os.environ.get("COMMAND_RESPONSE_TYPE", "in_channel").strip()
+
+# --- Auto content ------------------------------------------------------------
+# UTC hour to post the day recap (e.g. 21 = 21:00 UTC). -1 disables it.
+DAILY_SUMMARY_HOUR_UTC = int(os.environ.get("DAILY_SUMMARY_HOUR_UTC", "-1"))
+ENABLE_RECORDS = _bool("ENABLE_RECORDS", True)
+
+# --- One-time history backfill (so week/month commands aren't empty at launch)
+# >0 -> on startup, scrape the last N days per site into the store (idempotent).
+BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "0"))
+
+
 def in_active_window(hour_utc: int) -> bool:
     if not ACTIVE_HOURS_UTC:
         return True

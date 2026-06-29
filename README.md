@@ -93,3 +93,46 @@ sub-id / campaign that identifies the buyer, two things make the names appear:
 Set `BQ_MIRROR=true` now (with the same service-account JSON the dashboard uses)
 and every FTD is logged to `FtdEvents` — that's the table the leaderboard will
 read once buyer attribution lands.
+
+---
+
+## Slash commands (`/ftd`)
+
+Lets anyone pull stats on demand, straight in Slack:
+
+```
+/ftd                      today's overview (sources + top brands)
+/ftd today|yesterday|week|month|30d
+/ftd sources [period]     totals by traffic source
+/ftd brands  [period]     brand leaderboard
+/ftd help
+```
+
+Commands read a local SQLite store the poller keeps current, so they answer
+instantly without hitting Voonix.
+
+### Enabling commands (one-time Slack setup)
+1. The service now also runs a web server. After deploying, Railway gives it a
+   public URL like `https://<app>.up.railway.app`.
+2. In the Slack app → **Slash Commands** → **Create New Command**:
+   - Command: `/ftd`
+   - Request URL: `https://<app>.up.railway.app/slack/commands`
+   - Short description / usage hint: `today | week | month | sources | brands`
+3. In the Slack app → **Basic Information** → copy the **Signing Secret** →
+   set it as `SLACK_SIGNING_SECRET` in Railway. (Without it, the endpoint
+   rejects every request — by design.)
+4. **Reinstall** the app to the workspace (slash commands need the reinstall).
+
+Set `COMMAND_RESPONSE_TYPE=in_channel` so replies are visible to everyone (FOMO),
+or `ephemeral` so only the person who typed it sees the answer.
+
+## Auto content
+- **Daily recap** — set `DAILY_SUMMARY_HOUR_UTC` (e.g. `21`) and the bot posts a
+  by-source recap + brand of the day once a day. `-1` disables it.
+- **Records** — `ENABLE_RECORDS=true` posts a one-off 🏆 ping when a source beats
+  its all-time best single-day FTD count.
+
+## History at launch
+Set `BACKFILL_DAYS=14` so on first start it scrapes the last 14 days into the
+store — otherwise `/ftd week` / `/ftd month` are empty until enough days have
+accumulated. It's idempotent and skips itself once history exists.

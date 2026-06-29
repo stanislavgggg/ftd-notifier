@@ -213,12 +213,13 @@ def _parse_brand_rows(header: list[str], rows: list[list[str]]) -> list[dict]:
     return out
 
 
-async def scrape_once() -> list[dict]:
+async def scrape_once(dates: list[str] | None = None) -> list[dict]:
     """One poll: for every configured site and lookback day, return brand rows.
     Each item: {date, site_id, site_label, brand, ftd, deposits, deposit_value}.
-    Reuses a saved session; re-auths (2FA) only if Voonix expired it."""
+    Reuses a saved session; re-auths (2FA) only if Voonix expired it.
+    Pass `dates` to scrape an explicit list (used for the one-time backfill)."""
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    dates = utc_dates(config.LOOKBACK_DAYS)
+    dates = dates or utc_dates(config.LOOKBACK_DAYS)
     state_path = _state_file()
     have_state = os.path.exists(state_path)
     results: list[dict] = []
