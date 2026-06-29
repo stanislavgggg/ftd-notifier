@@ -213,10 +213,11 @@ def _col(header: list[str], *names: str) -> int:
 
 
 def _parse_brand_rows(header: list[str], rows: list[list[str]]) -> list[dict]:
-    """Turn an L1 CSV into [{brand, ftd, deposits, deposit_value}] per advertiser.
-    Columns are matched by NAME (Voonix's column picker can reorder/hide them)."""
+    """Turn an L1 CSV into [{brand, ftd, signups, deposits, deposit_value}] per
+    advertiser. Columns are matched by NAME (Voonix's column picker reorders)."""
     i_name = 0  # first column is always the advertiser name
     i_ftd  = _col(header, "FTD")
+    i_su   = _col(header, "Signups", "Sign ups", "Sign-ups")
     i_dep  = _col(header, "Deposits")
     i_depv = _col(header, "Deposit value")
     out = []
@@ -231,6 +232,7 @@ def _parse_brand_rows(header: list[str], rows: list[list[str]]) -> list[dict]:
         out.append({
             "brand": brand,
             "ftd": ftd,
+            "signups": parse_num(r[i_su], int) if 0 <= i_su < len(r) else 0,
             "deposits": parse_num(r[i_dep], int) if 0 <= i_dep < len(r) else 0,
             "deposit_value": parse_num(r[i_depv], float) if 0 <= i_depv < len(r) else 0.0,
         })
