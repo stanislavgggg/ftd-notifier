@@ -38,6 +38,9 @@ _baselined = False
 
 # How many days each resumable backfill chunk scrapes before saving progress.
 BACKFILL_CHUNK = 15
+# Tracker scraping is ~150 requests/day per site, so save progress more often.
+TRACKER_BACKFILL_CHUNK = 3
+_last_tracker_scrape = 0.0  # epoch seconds of last tracker refresh
 
 
 def _key(r: dict) -> tuple[str, str, str]:
@@ -153,13 +156,76 @@ def backfill():
     print(f"✅ Backfill done: {done}/{len(todo)} missing days filled")
 
 
+def tracker_backfill():
+    """One-time deep history for campaign-level trackers. Same resumable, chunked
+    design as backfill() but on the heavy L1→L2→L3 drilldown, smaller chunks, and
+    its own tracker_daily store. Off when TRACKER_SITES or TRACKER_BACKFILL_DAYS
+    is empty/0."""
+    if not config.TRACKER_SITES or config.TRACKER_BACKFILL_DAYS <= 0:
+        return
+    import asyncio
+    from datetime import timedelta
+    today = datetime.now(timezone.utc).date()
+    wanted = [(today - timedelta(days=i)).strftime("%Y-%m-%d")
+              for i in range(config.TRACKER_BACKFILL_DAYS)]
+    have = store.tracker_existing_dates()
+    todo = [d for d in wanted if d not in have]
+    if not todo:
+        print(f"↩️  Tracker backfill skipped (all {len(wanted)} days already in store)")
+        return
+    sites = [s[1] for s in config.TRACKER_SITES]
+    print(f"⏳ Tracker backfill: {len(todo)} missing day(s) of {len(wanted)} "
+          f"for {sites} ({wanted[-1]} … {wanted[0]}), chunks of {TRACKER_BACKFILL_CHUNK}. "
+          f"This is slow (~150 req/day/site) — expect hours.")
+    done = 0
+    for i in range(0, len(todo), TRACKER_BACKFILL_CHUNK):
+        chunk = todo[i:i + TRACKER_BACKFILL_CHUNK]
+        try:
+            rows = asyncio.run(voonix_client.scrape_trackers_once(dates=chunk))
+            store.upsert_tracker_rows(rows)
+            done += len(chunk)
+            print(f"   ✅ Tracker backfill {done}/{len(todo)} days "
+                  f"({chunk[-1]} … {chunk[0]}) — {len(rows)} campaign-days saved")
+        except Exception as e:
+            print(f"   ⚠️ Tracker chunk failed ({chunk[-1]} … {chunk[0]}): {e} — continuing")
+    print(f"✅ Tracker backfill done: {done}/{len(todo)} missing days filled")
+
+
+def maybe_refresh_trackers():
+    """Refresh today's + yesterday's trackers, but at most every
+    TRACKER_REFRESH_HOURS — never on the 5-minute poll cadence (too heavy)."""
+    global _last_tracker_scrape
+    if not config.TRACKER_SITES:
+        return
+    now = time.time()
+    if now - _last_tracker_scrape < config.TRACKER_REFRESH_HOURS * 3600:
+        return
+    import asyncio
+    from datetime import timedelta
+    today = datetime.now(timezone.utc).date()
+    days = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in (1, 0)]
+    print(f"🔁 Tracker refresh for {days} ({[s[1] for s in config.TRACKER_SITES]})")
+    try:
+        rows = asyncio.run(voonix_client.scrape_trackers_once(dates=days))
+        store.upsert_tracker_rows(rows)
+        _last_tracker_scrape = now
+        print(f"   ✅ Tracker refresh saved {len(rows)} campaign-days")
+    except Exception as e:
+        print(f"   ⚠️ Tracker refresh failed: {e}")
+
+
 def poll_loop():
     backfill()
+    tracker_backfill()
     while True:
         try:
             one_cycle()
         except Exception as e:
             print(f"❌ Cycle error (will retry next interval): {e}")
+        try:
+            maybe_refresh_trackers()
+        except Exception as e:
+            print(f"❌ Tracker refresh error (will retry): {e}")
         if config.RUN_ONCE:
             return
         time.sleep(config.POLL_INTERVAL_SECONDS)
