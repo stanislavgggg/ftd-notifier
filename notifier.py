@@ -36,6 +36,9 @@ except Exception:
 _seen: dict[tuple[str, str, str], dict] = {}
 _baselined = False
 
+# How many days each resumable backfill chunk scrapes before saving progress.
+BACKFILL_CHUNK = 15
+
 
 def _key(r: dict) -> tuple[str, str, str]:
     return (r["date"], r["site_id"], r["brand"])
@@ -118,26 +121,36 @@ def one_cycle():
 
 
 def backfill():
-    """One-time history seed so week/month commands aren't empty at launch."""
+    """Seed history so month/week commands aren't empty. Resumable: it only
+    scrapes days NOT already in the store, in chunks, saving after each chunk —
+    so a restart mid-way continues instead of starting over, and a deep (e.g.
+    365-day) backfill survives interruptions."""
     if config.BACKFILL_DAYS <= 0:
         return
     import asyncio
     from datetime import timedelta
     today = datetime.now(timezone.utc).date()
-    target_oldest = (today - timedelta(days=config.BACKFILL_DAYS)).isoformat()
-    have = store.earliest_date()
-    if have and have <= target_oldest:
-        print(f"↩️  Backfill skipped (store already has data back to {have})")
+    wanted = [(today - timedelta(days=i)).strftime("%Y-%m-%d")
+              for i in range(config.BACKFILL_DAYS)]            # newest first
+    have = store.existing_dates()
+    todo = [d for d in wanted if d not in have]
+    if not todo:
+        print(f"↩️  Backfill skipped (all {len(wanted)} days already in store)")
         return
-    dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d")
-             for i in range(config.BACKFILL_DAYS)]
-    print(f"⏳ Backfilling {len(dates)} days into the store ({dates[-1]} … {dates[0]})...")
-    try:
-        rows = asyncio.run(voonix_client.scrape_once(dates=dates))
-        store.upsert_rows(rows)
-        print(f"✅ Backfill done: {len(rows)} brand-days stored")
-    except Exception as e:
-        print(f"⚠️ Backfill failed (non-fatal): {e}")
+    print(f"⏳ Backfilling {len(todo)} missing day(s) of {len(wanted)} "
+          f"({wanted[-1]} … {wanted[0]}) in chunks of {BACKFILL_CHUNK}...")
+    done = 0
+    for i in range(0, len(todo), BACKFILL_CHUNK):
+        chunk = todo[i:i + BACKFILL_CHUNK]
+        try:
+            rows = asyncio.run(voonix_client.scrape_once(dates=chunk))
+            store.upsert_rows(rows)
+            done += len(chunk)
+            print(f"   ✅ Backfill progress {done}/{len(todo)} days "
+                  f"({chunk[-1]} … {chunk[0]}) — {len(rows)} brand-days saved")
+        except Exception as e:
+            print(f"   ⚠️ Backfill chunk failed ({chunk[-1]} … {chunk[0]}): {e} — continuing")
+    print(f"✅ Backfill done: {done}/{len(todo)} missing days filled")
 
 
 def poll_loop():
