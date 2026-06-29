@@ -101,6 +101,7 @@ def process(rows: list[dict]):
     # FOMO extras (both no-op unless enabled / past the configured hour).
     summary.check_records(rows, now)
     summary.maybe_post_daily_summary(now)
+    summary.maybe_post_morning_report(now)
 
     print(f"   ↳ cycle done: {len(rows)} brand-days scanned, {notifications} notification(s) sent")
 
@@ -161,6 +162,7 @@ def main():
     print(f"  commands: {'ON (signing secret set)' if config.SLACK_SIGNING_SECRET else 'off (no signing secret)'}")
     print(f"  daily recap: {'hour '+str(config.DAILY_SUMMARY_HOUR_UTC)+' UTC' if config.DAILY_SUMMARY_HOUR_UTC>=0 else 'off'}"
           f"   records: {'on' if config.ENABLE_RECORDS else 'off'}")
+    print(f"  morning report (yesterday): {'hour '+str(config.MORNING_REPORT_HOUR_UTC)+' UTC' if config.MORNING_REPORT_HOUR_UTC>=0 else 'off'}")
     print(f"  bq mirror:{'on' if (config.BQ_MIRROR and bq_mirror) else 'off'}")
     print("=" * 60)
 
