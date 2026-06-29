@@ -263,13 +263,30 @@ async def scrape_once(dates: list[str] | None = None) -> list[dict]:
         page = await context.new_page()
         page.set_default_timeout(60000)
 
-        # Probe the first site/day with the restored session; re-auth if dead.
+        # Establish a logged-in session. Navigate to the first data page, then
+        # wait for EITHER the CSV export button (already authenticated) OR the
+        # login form's password field (session dead / first run). This removes a
+        # redirect race where the old probe was checked before Voonix finished
+        # bouncing us to the login page, which silently skipped the login.
         first_site = config.SITES[0][0]
-        await _navigate(page, f"?p=siteearnings&start={dates[0]}&end={dates[0]}&site={first_site}&&submit")
-        if not await _looks_logged_in(page):
+        probe = f"?p=siteearnings&start={dates[0]}&end={dates[0]}&site={first_site}&&submit"
+        await _navigate(page, probe)
+        try:
+            await page.wait_for_selector(
+                'a.buttons-csv, button.buttons-csv, input[name="password"]', timeout=25000
+            )
+        except Exception:
+            pass
+        if await page.query_selector('input[name="password"]'):
+            print("🔓 No active session — logging in.")
             await _full_login(page)
-            await context.storage_state(path=state_path)
-            print(f"💾 Session saved → {state_path}")
+            try:
+                await context.storage_state(path=state_path)
+                print(f"💾 Session saved → {state_path}")
+            except Exception as e:
+                print(f"   ⚠️ Could not save session state: {e}")
+        else:
+            print("🔑 Existing session is valid — skipping login.")
 
         for site_id, site_label in config.SITES:
             for date_str in dates:
