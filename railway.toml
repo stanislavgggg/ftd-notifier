@@ -1,0 +1,9 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Long-running worker: it polls on its own POLL_INTERVAL_SECONDS loop and
+# keeps the Voonix session warm, so restart it if it ever crashes.
+restartPolicyType = "ALWAYS"
+restartPolicyMaxRetries = 10
