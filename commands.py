@@ -17,6 +17,7 @@ HELP = (
     "*FTD bot — commands*\n"
     "`/ftd` — today's overview\n"
     "`/ftd today | yesterday | week | month | 30d` — overview for a period\n"
+    "`/ftd july | december …` — a named month (add a year for older, e.g. `/ftd july 2025`)\n"
     "`/ftd sources [period]` — totals by traffic source\n"
     "`/ftd brands [period]` — brand leaderboard\n"
     "`/ftd help` — this message"
