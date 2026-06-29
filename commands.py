@@ -20,6 +20,8 @@ HELP = (
     "`/ftd july | december …` — a named month (add a year for older, e.g. `/ftd july 2025`)\n"
     "`/ftd sources [period]` — totals by traffic source\n"
     "`/ftd brands [period]` — brand leaderboard\n"
+    "`/ftd trackers [period]` — campaign/tracker leaderboard (MAIL)\n"
+    "`/ftd tracker <name> [period]` — one tracker, e.g. `/ftd tracker LG week`\n"
     "`/ftd help` — this message"
 )
 
@@ -54,6 +56,32 @@ def _brands_lines(start: str, end: str, limit: int = 10) -> str:
     return "\n".join(out)
 
 
+def _trackers_lines(start: str, end: str, limit: int = 10) -> str:
+    rows = store.tracker_leaderboard(start, end, limit)
+    if not rows:
+        return "_no tracker data for this period yet_"
+    medals = ["🥇", "🥈", "🥉"]
+    out = []
+    for i, r in enumerate(rows):
+        tag = medals[i] if i < 3 else f"{i+1}."
+        out.append(f"{tag} *{r['campaign']}* — {int(r['ftd'])} FTD · {int(r['signups'])} signups")
+    return "\n".join(out)
+
+
+def _tracker_search_blocks(query: str, start: str, end: str, label: str) -> list[dict]:
+    rows = store.tracker_search(query, start, end)
+    if not rows:
+        return [_section(f"📊 *Tracker \"{query}\" — {label}*  ·  no matching campaigns")]
+    ftd = sum(int(r["ftd"]) for r in rows)
+    su = sum(int(r["signups"]) for r in rows)
+    head = (f"📊 *Tracker \"{query}\" — {label}*\n"
+            f"Matched {len(rows)} campaign{'s' if len(rows) != 1 else ''}\n"
+            f"Total: *{ftd} FTD* · {su} signups")
+    lines = "\n".join(
+        f"• *{r['campaign']}* — {int(r['ftd'])} FTD · {int(r['signups'])} signups" for r in rows)
+    return [_section(head), _section(lines)]
+
+
 def _overview(start: str, end: str, label: str) -> list[dict]:
     tot = store.grand_total(start, end)
     header = f"📊 *FTD — {label}*\nTotal: *{int(tot['ftd'])} FTD* · {int(tot['signups'])} signups"
@@ -77,6 +105,20 @@ def handle(text: str) -> dict:
     elif sub == "brands":
         start, end, label = util.parse_period(" ".join(parts[1:]))
         blocks = [_section(f"🏆 *Brands — {label}*\n" + _brands_lines(start, end, 10))]
+    elif sub == "trackers":
+        start, end, label = util.parse_period(" ".join(parts[1:]))
+        tot = store.tracker_grand_total(start, end)
+        head = (f"📊 *Trackers — {label}*\n"
+                f"Total: *{int(tot['ftd'])} FTD* · {int(tot['signups'])} signups")
+        blocks = [_section(head), _section(_trackers_lines(start, end, 10))]
+    elif sub == "tracker":
+        # /ftd tracker <query> [period]. First arg = search string; rest = period.
+        if len(parts) < 2:
+            blocks = [_section("Usage: `/ftd tracker <name> [period]` — e.g. `/ftd tracker LG week`")]
+        else:
+            query = parts[1]
+            start, end, label = util.parse_period(" ".join(parts[2:]))
+            blocks = _tracker_search_blocks(query, start, end, label)
     else:
         # No subcommand or a bare period word -> overview for that period.
         start, end, label = util.parse_period(text)
