@@ -54,14 +54,9 @@ def build_blocks(ev: dict) -> tuple[str, list]:
 
     headline = f"{hype} *{lead} — {ev['site_label']}*"
     brand_line = f"🎰 *{ev['brand']}*  +{n} {plural}"
-    if ev["deposit_delta"] > 0:
-        brand_line += f"  ·  {_eur(ev['deposit_delta'])} deposited"
     brand_line += _buyer_suffix(ev["brand"])
 
-    running = (
-        f"📊 {ev['site_label']} today: *{ev['day_ftd']} FTD* · "
-        f"{_eur(ev['day_deposit'])} deposits"
-    )
+    running = f"📊 {ev['site_label']} today: *{ev['day_ftd']} FTD*"
 
     fallback = f"{lead} — {ev['site_label']}: {ev['brand']} +{n} {plural}"
     blocks = [
