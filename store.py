@@ -61,11 +61,14 @@ def conn() -> sqlite3.Connection:
 
 
 def upsert_rows(rows: list[dict]):
-    """rows: [{date, site_id, site_label, brand, ftd, deposits, deposit_value}]"""
+    """rows: [{date, site_id, site_label, brand, ftd, signups, deposits, deposit_value}]"""
     if not rows:
         return
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
+    # Fill defaults so rows from any scraper version (with or without signups)
+    # never crash the write — a present value always wins over the default.
+    norm = [{"signups": 0, "deposits": 0, "deposit_value": 0.0, **r, "now": now} for r in rows]
     with _lock:
         c = conn()
         c.executemany("""
@@ -79,7 +82,7 @@ def upsert_rows(rows: list[dict]):
               deposits      = excluded.deposits,
               deposit_value = excluded.deposit_value,
               updated_at    = excluded.updated_at
-        """, [{**r, "now": now} for r in rows])
+        """, norm)
         c.commit()
 
 
