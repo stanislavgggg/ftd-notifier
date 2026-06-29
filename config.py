@@ -39,6 +39,10 @@ def _parse_sites(raw: str) -> list[tuple[str, str]]:
 
 SITES = _parse_sites(os.environ.get("SITES", "82:MAIL,29:META"))
 
+# Auto-discover every site from Voonix's all-sites table each run, so new traffic
+# sources are picked up without editing SITES. Falls back to SITES on failure.
+AUTO_DISCOVER_SITES = _bool("AUTO_DISCOVER_SITES", True)
+
 # --- Cadence -----------------------------------------------------------------
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "900"))   # 15 min
 # Also re-check yesterday so late-settling FTDs still fire a notification.
