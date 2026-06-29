@@ -151,3 +151,10 @@ def earliest_date() -> str | None:
     c = conn()
     r = c.execute("SELECT MIN(date) AS d FROM brand_daily").fetchone()
     return r["d"] if r and r["d"] else None
+
+
+def existing_dates() -> set:
+    """Set of every date already present, so backfill can skip done days."""
+    c = conn()
+    cur = c.execute("SELECT DISTINCT date FROM brand_daily")
+    return {r["date"] for r in cur.fetchall()}
