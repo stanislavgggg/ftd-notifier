@@ -98,6 +98,9 @@ COMMAND_RESPONSE_TYPE = os.environ.get("COMMAND_RESPONSE_TYPE", "in_channel").st
 # --- Auto content ------------------------------------------------------------
 # UTC hour to post the day recap (e.g. 21 = 21:00 UTC). -1 disables it.
 DAILY_SUMMARY_HOUR_UTC = int(os.environ.get("DAILY_SUMMARY_HOUR_UTC", "-1"))
+# UTC hour to post YESTERDAY's final recap in the morning. 5 ≈ 07:00 Spain
+# (CEST, summer) / 06:00 (CET, winter). -1 disables it.
+MORNING_REPORT_HOUR_UTC = int(os.environ.get("MORNING_REPORT_HOUR_UTC", "5"))
 ENABLE_RECORDS = _bool("ENABLE_RECORDS", True)
 
 # --- One-time history backfill (so week/month commands aren't empty at launch)
