@@ -122,13 +122,13 @@ def top_brands(start: str, end: str, limit: int = 10) -> list[dict]:
     c = conn()
     cur = c.execute("""
         SELECT brand,
-               MAX(site_label)    AS site_label,
+               site_label,
                SUM(ftd)           AS ftd,
                SUM(signups)       AS signups,
                SUM(deposit_value) AS deposit_value
         FROM brand_daily
         WHERE date BETWEEN ? AND ?
-        GROUP BY brand
+        GROUP BY brand, site_label
         HAVING SUM(ftd) > 0
         ORDER BY ftd DESC, signups DESC
         LIMIT ?
