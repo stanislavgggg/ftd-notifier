@@ -29,6 +29,7 @@ import config
 
 STATE_FILE = None  # resolved lazily (see _state_file)
 DOWNLOAD_DIR = "/tmp/voonix_ftd"
+_TRK_CSV_SAMPLED = False  # log L3 campaign CSV structure once, to fix name parsing
 
 
 def _state_file() -> str:
@@ -395,6 +396,7 @@ async def scrape_trackers_once(dates: list[str] | None = None,
     Each item: {date, site_id, site_label, campaign, ftd, signups, deposits, deposit_value}.
     This is heavy (~150 requests/day per site) — call it on a slow cadence only."""
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    global _TRK_CSV_SAMPLED
     dates = dates or utc_dates(config.LOOKBACK_DAYS)
     sites = sites if sites is not None else config.TRACKER_SITES
     if not sites:
@@ -415,6 +417,11 @@ async def scrape_trackers_once(dates: list[str] | None = None,
                         if not got:
                             continue
                         header, rows = got
+                        if not _TRK_CSV_SAMPLED and rows:
+                            _TRK_CSV_SAMPLED = True
+                            print(f"   🧪 L3 CSV header: {header}")
+                            for sr in rows[:3]:
+                                print(f"   🧪 L3 row[0]={sr[0]!r}  cells={sr[:6]}")
                         for r in _parse_brand_rows(header, rows):  # row[0] = campaign name
                             results.append({
                                 "date": date_str, "site_id": site_id, "site_label": site_label,
