@@ -182,9 +182,28 @@ def upsert_tracker_rows(rows: list[dict]):
     """rows: [{date, site_id, site_label, campaign, ftd, signups, deposits, deposit_value}]"""
     if not rows:
         return
+    # The same campaign name can appear under multiple logins within one
+    # site/day. The PK is (date, site_id, campaign), so without pre-aggregation
+    # the executemany would let each later duplicate OVERWRITE the earlier one
+    # and silently drop FTDs. Sum duplicates into a single row first.
+    agg: dict = {}
+    for r in rows:
+        key = (r["date"], r["site_id"], r["campaign"])
+        a = agg.get(key)
+        if a is None:
+            a = {"date": r["date"], "site_id": r["site_id"],
+                 "site_label": r.get("site_label", ""), "campaign": r["campaign"],
+                 "ftd": 0, "signups": 0, "deposits": 0, "deposit_value": 0.0}
+            agg[key] = a
+        a["ftd"] += r.get("ftd") or 0
+        a["signups"] += r.get("signups") or 0
+        a["deposits"] += r.get("deposits") or 0
+        a["deposit_value"] += r.get("deposit_value") or 0.0
+        if r.get("site_label"):
+            a["site_label"] = r["site_label"]
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
-    norm = [{"signups": 0, "deposits": 0, "deposit_value": 0.0, **r, "now": now} for r in rows]
+    norm = [{**a, "now": now} for a in agg.values()]
     with _lock:
         c = conn()
         c.executemany("""
@@ -202,9 +221,16 @@ def upsert_tracker_rows(rows: list[dict]):
         c.commit()
 
 
-def tracker_existing_dates() -> set:
+def tracker_existing_dates(site_id: str | None = None) -> set:
+    """Dates already stored. When site_id is given, only that site's dates — so
+    backfill can resume per-site (adding a new site won't be masked by MAIL's
+    already-filled dates)."""
     c = conn()
-    return {r["date"] for r in c.execute("SELECT DISTINCT date FROM tracker_daily").fetchall()}
+    if site_id:
+        cur = c.execute("SELECT DISTINCT date FROM tracker_daily WHERE site_id=?", (site_id,))
+    else:
+        cur = c.execute("SELECT DISTINCT date FROM tracker_daily")
+    return {r["date"] for r in cur.fetchall()}
 
 
 def tracker_grand_total(start: str, end: str) -> dict:
@@ -217,11 +243,11 @@ def tracker_grand_total(start: str, end: str) -> dict:
 
 def tracker_leaderboard(start: str, end: str, limit: int = 10) -> list[dict]:
     cur = conn().execute("""
-        SELECT campaign, MAX(site_label) AS site_label,
+        SELECT campaign, site_label,
                SUM(ftd) AS ftd, SUM(signups) AS signups
         FROM tracker_daily
         WHERE date BETWEEN ? AND ?
-        GROUP BY campaign
+        GROUP BY campaign, site_label
         ORDER BY ftd DESC, signups DESC
         LIMIT ?
     """, (start, end, limit))
@@ -231,11 +257,11 @@ def tracker_leaderboard(start: str, end: str, limit: int = 10) -> list[dict]:
 def tracker_search(query: str, start: str, end: str, limit: int = 25) -> list[dict]:
     """Campaigns whose name contains `query` (case-insensitive), with totals."""
     cur = conn().execute("""
-        SELECT campaign, MAX(site_label) AS site_label,
+        SELECT campaign, site_label,
                SUM(ftd) AS ftd, SUM(signups) AS signups
         FROM tracker_daily
         WHERE date BETWEEN ? AND ? AND campaign LIKE ? COLLATE NOCASE
-        GROUP BY campaign
+        GROUP BY campaign, site_label
         ORDER BY ftd DESC, signups DESC
         LIMIT ?
     """, (start, end, f"%{query}%", limit))
