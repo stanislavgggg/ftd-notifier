@@ -216,19 +216,39 @@ def maybe_refresh_trackers():
 
 def poll_loop():
     backfill()
-    tracker_backfill()
     while True:
         try:
             one_cycle()
         except Exception as e:
             print(f"❌ Cycle error (will retry next interval): {e}")
+        if config.RUN_ONCE:
+            return
+        time.sleep(config.POLL_INTERVAL_SECONDS)
+
+
+def tracker_loop():
+    """Heavy campaign-level scraping on its OWN thread, so the slow deep
+    backfill (hours) and periodic refresh (~minutes) never block the 5-minute
+    brand poll or the live FTD pings. Deep backfill once, then slow refresh."""
+    if not config.TRACKER_SITES:
+        return
+    global _last_tracker_scrape
+    # On a cold start both threads may need to log in; let the brand poller grab
+    # its 2FA code first so the two logins don't race for the same Gmail message.
+    time.sleep(90)
+    try:
+        tracker_backfill()
+        _last_tracker_scrape = time.time()  # backfill already covered recent days
+    except Exception as e:
+        print(f"❌ Tracker backfill error: {e}")
+    while True:
+        if config.RUN_ONCE:
+            return
+        time.sleep(300)  # re-check every 5 min; actual refresh gated by TRACKER_REFRESH_HOURS
         try:
             maybe_refresh_trackers()
         except Exception as e:
             print(f"❌ Tracker refresh error (will retry): {e}")
-        if config.RUN_ONCE:
-            return
-        time.sleep(config.POLL_INTERVAL_SECONDS)
 
 
 def main():
@@ -247,10 +267,13 @@ def main():
 
     if config.RUN_ONCE:
         poll_loop()
+        tracker_loop()
         return
 
-    # Poll in the background; serve slash commands in the foreground.
+    # Brand polling + live pings and the heavy tracker scrape run on SEPARATE
+    # threads so the slow tracker drilldown can never starve the FTD notifier.
     threading.Thread(target=poll_loop, daemon=True).start()
+    threading.Thread(target=tracker_loop, daemon=True).start()
 
     import uvicorn
     from server import app
