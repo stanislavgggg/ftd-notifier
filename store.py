@@ -73,7 +73,57 @@ def conn() -> sqlite3.Connection:
         """)
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_td_date ON tracker_daily(date)")
         _conn.commit()
+        _migrate_clean_tracker_names(_conn)
     return _conn
+
+
+def clean_tracker_name(raw: str) -> str:
+    """Voonix's L3 'Campaign' value is '{tracker_id} {name}' — e.g.
+    '535010 FB_LTLVHRES', 'custom_5409 LGmrk', 'LGmrk_LGmrk LGmrk_LGmrk'. The
+    leading id token fragments the same tracker across links, so drop it and keep
+    the name. Single-token values are returned unchanged."""
+    raw = (raw or "").strip()
+    parts = raw.split(None, 1)
+    return parts[1].strip() if len(parts) == 2 else raw
+
+
+def _migrate_clean_tracker_names(c: sqlite3.Connection):
+    """One-time, idempotent: rewrite stored tracker campaign names through
+    clean_tracker_name and merge fragments collapsing to the same name. No-op
+    once every stored name is already clean."""
+    try:
+        rows = c.execute(
+            "SELECT date, site_id, site_label, campaign, ftd, signups, deposits, deposit_value "
+            "FROM tracker_daily").fetchall()
+    except Exception:
+        return
+    if not rows or all(clean_tracker_name(r["campaign"]) == r["campaign"] for r in rows):
+        return
+    agg: dict = {}
+    for r in rows:
+        name = clean_tracker_name(r["campaign"])
+        key = (r["date"], r["site_id"], name)
+        a = agg.get(key)
+        if a is None:
+            a = {"date": r["date"], "site_id": r["site_id"], "site_label": r["site_label"],
+                 "campaign": name, "ftd": 0, "signups": 0, "deposits": 0, "deposit_value": 0.0}
+            agg[key] = a
+        a["ftd"] += r["ftd"] or 0
+        a["signups"] += r["signups"] or 0
+        a["deposits"] += r["deposits"] or 0
+        a["deposit_value"] += r["deposit_value"] or 0.0
+        if r["site_label"]:
+            a["site_label"] = r["site_label"]
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    c.execute("DELETE FROM tracker_daily")
+    c.executemany(
+        "INSERT INTO tracker_daily "
+        "(date,site_id,site_label,campaign,ftd,signups,deposits,deposit_value,updated_at) "
+        "VALUES (:date,:site_id,:site_label,:campaign,:ftd,:signups,:deposits,:deposit_value,:now)",
+        [{**a, "now": now} for a in agg.values()])
+    c.commit()
+    print(f"🧹 Migrated tracker names: {len(rows)} rows → {len(agg)} clean campaigns")
 
 
 def upsert_rows(rows: list[dict]):
@@ -188,11 +238,12 @@ def upsert_tracker_rows(rows: list[dict]):
     # and silently drop FTDs. Sum duplicates into a single row first.
     agg: dict = {}
     for r in rows:
-        key = (r["date"], r["site_id"], r["campaign"])
+        campaign = clean_tracker_name(r["campaign"])
+        key = (r["date"], r["site_id"], campaign)
         a = agg.get(key)
         if a is None:
             a = {"date": r["date"], "site_id": r["site_id"],
-                 "site_label": r.get("site_label", ""), "campaign": r["campaign"],
+                 "site_label": r.get("site_label", ""), "campaign": campaign,
                  "ftd": 0, "signups": 0, "deposits": 0, "deposit_value": 0.0}
             agg[key] = a
         a["ftd"] += r.get("ftd") or 0
