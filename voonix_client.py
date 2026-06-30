@@ -351,8 +351,10 @@ async def _download_csv(page, params: str) -> tuple[list[str], list[list[str]]] 
 
 
 async def _open_logged_in(p, probe_date: str):
-    """Launch a browser, restore the saved session (or log in), return handles."""
-    state_path = _state_file()
+    """Launch a browser, restore the saved session (or log in), return handles.
+    Used by the tracker scraper, which runs on its own thread — so it keeps a
+    SEPARATE session-state file to avoid racing the brand poller's writes."""
+    state_path = os.path.join(os.path.dirname(_state_file()), "voonix_state_trackers.json")
     have_state = os.path.exists(state_path)
     browser = await p.chromium.launch(
         headless=config.HEADLESS, args=["--no-sandbox", "--disable-setuid-sandbox"]
