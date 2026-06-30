@@ -129,7 +129,7 @@ def top_brands(start: str, end: str, limit: int = 10) -> list[dict]:
         FROM brand_daily
         WHERE date BETWEEN ? AND ?
         GROUP BY brand
-        HAVING ftd > 0
+        HAVING SUM(ftd) > 0
         ORDER BY ftd DESC, signups DESC
         LIMIT ?
     """, (start, end, limit))
