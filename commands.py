@@ -56,6 +56,14 @@ def _brands_lines(start: str, end: str, limit: int = 10) -> str:
     return "\n".join(out)
 
 
+def _multi_tracker_sites() -> bool:
+    return len({lbl for _, lbl in config.TRACKER_SITES}) > 1
+
+
+def _trk_site(r: dict) -> str:
+    return f" ({r['site_label']})" if _multi_tracker_sites() else ""
+
+
 def _trackers_lines(start: str, end: str, limit: int = 10) -> str:
     rows = store.tracker_leaderboard(start, end, limit)
     if not rows:
@@ -64,7 +72,7 @@ def _trackers_lines(start: str, end: str, limit: int = 10) -> str:
     out = []
     for i, r in enumerate(rows):
         tag = medals[i] if i < 3 else f"{i+1}."
-        out.append(f"{tag} *{r['campaign']}* — {int(r['ftd'])} FTD · {int(r['signups'])} signups")
+        out.append(f"{tag} *{r['campaign']}*{_trk_site(r)} — {int(r['ftd'])} FTD · {int(r['signups'])} signups")
     return "\n".join(out)
 
 
@@ -78,7 +86,7 @@ def _tracker_search_blocks(query: str, start: str, end: str, label: str) -> list
             f"Matched {len(rows)} campaign{'s' if len(rows) != 1 else ''}\n"
             f"Total: *{ftd} FTD* · {su} signups")
     lines = "\n".join(
-        f"• *{r['campaign']}* — {int(r['ftd'])} FTD · {int(r['signups'])} signups" for r in rows)
+        f"• *{r['campaign']}*{_trk_site(r)} — {int(r['ftd'])} FTD · {int(r['signups'])} signups" for r in rows)
     return [_section(head), _section(lines)]
 
 
