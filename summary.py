@@ -54,6 +54,12 @@ def post_daily_summary(date: str, heading: str | None = None):
         b = brands[0]
         lines.append(f"\n👑 Brand of the day: *{b['brand']}* — {int(b['ftd'])} FTD · {int(b['signups'])} signups")
 
+    if config.TRACKER_SITES:
+        trk = store.tracker_leaderboard(date, date, 1)
+        if trk and trk[0]["ftd"]:
+            t = trk[0]
+            lines.append(f"🎯 Top tracker: *{t['campaign']}* — {int(t['ftd'])} FTD · {int(t['signups'])} signups")
+
     text = f"Recap {date}: {int(tot['ftd'])} FTD"
     _post_raw(text, [{"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}}])
 
