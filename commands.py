@@ -85,11 +85,14 @@ def _tracker_search_blocks(query: str, start: str, end: str, label: str) -> list
 def _overview(start: str, end: str, label: str) -> list[dict]:
     tot = store.grand_total(start, end)
     header = f"📊 *FTD — {label}*\nTotal: *{int(tot['ftd'])} FTD* · {int(tot['signups'])} signups"
-    return [
+    blocks = [
         _section(header),
         _section("*By source*\n" + _sources_lines(start, end)),
         _section("*Top brands*\n" + _brands_lines(start, end, 5)),
     ]
+    if config.TRACKER_SITES:
+        blocks.append(_section("*Top trackers*\n" + _trackers_lines(start, end, 5)))
+    return blocks
 
 
 def handle(text: str) -> dict:
