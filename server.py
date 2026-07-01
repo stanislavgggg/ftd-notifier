@@ -73,8 +73,41 @@ async def slack_commands(request: Request):
 
 @app.post("/slack/interactions")
 async def slack_interactions(request: Request):
-    # Stub for future Block Kit buttons. Verify + 200 so Slack is happy.
+    """Handle button clicks and dropdown selections from the panel: figure out
+    what was chosen, render the matching view, and update the message in place."""
+    import json
+    from urllib.parse import parse_qs
+
+    import requests
+    import commands
+
     raw = await request.body()
     if not _verify_slack(raw, request.headers):
         return PlainTextResponse("invalid signature", status_code=401)
-    return JSONResponse({"ok": True})
+
+    form = parse_qs(raw.decode())
+    if "payload" not in form:
+        return JSONResponse({})
+    payload = json.loads(form["payload"][0])
+    actions = payload.get("actions") or []
+    if not actions:
+        return JSONResponse({})
+    a = actions[0]
+    value = a.get("value") or (a.get("selected_option") or {}).get("value", "")
+    if not value:
+        return JSONResponse({})  # e.g. the "Open in Voonix" url button — nothing to render
+
+    try:
+        resp = commands.action_to_response(value)
+    except Exception as e:
+        return JSONResponse({"text": f"⚠️ {e}"})
+
+    # Update the original message in place (works for ephemeral and in-channel).
+    response_url = payload.get("response_url")
+    if response_url:
+        try:
+            requests.post(response_url, json={"replace_original": True,
+                                              "blocks": resp["blocks"]}, timeout=10)
+        except Exception as e:
+            print(f"   ⚠️ interaction update failed: {e}")
+    return JSONResponse({})

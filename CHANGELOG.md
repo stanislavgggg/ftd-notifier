@@ -95,3 +95,21 @@ process (background poll thread + FastAPI).
   misleading when tracker data for the period hadn't been refreshed yet (e.g.
   today, since trackers refresh every ~6h) — showing "0 of N" as if data were
   lost. The command now just lists the trackers it has.
+
+## v1.9 — interactive panel (buttons + dropdowns)
+- Every response now carries a control panel: period buttons (Today/Yesterday/
+  7 days/Month), view buttons (Overview/Sources/Brands/Trackers), and Source/
+  Brand/Tracker dropdowns so you pick a name from a list instead of typing it.
+  Clicks re-render the message in place.
+- `/slack/interactions` implemented (signature-verified) to route button/dropdown
+  actions; requires enabling Interactivity in the Slack app (Request URL
+  = https://<app>.up.railway.app/slack/interactions).
+
+## v2.0 — max convenience panel
+- `/ftd menu`: a compact, pinnable control panel.
+- Panel now includes a 🔄 Refresh button, a "More periods" dropdown (this week,
+  last 30 days, this month, last month, this year), and an "Open in Voonix ↗"
+  deep link to the raw report for the current period.
+- Navigation preserves the real current period (incl. last month / this year)
+  across view switches and entity picks — buttons/dropdowns re-render in place.
+- parse_period gained "last month" and "this year"/"ytd".

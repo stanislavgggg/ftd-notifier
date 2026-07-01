@@ -46,6 +46,14 @@ def parse_period(text: str) -> tuple[str, str, str]:
     if t in ("month", "mtd", "месяц"):
         first = today.replace(day=1)
         return first.isoformat(), today.isoformat(), f"{today:%B} (MTD)"
+    if t in ("last month", "lastmonth", "prev month", "прошлый месяц"):
+        first_this = today.replace(day=1)
+        last_prev = first_this - timedelta(days=1)
+        first_prev = last_prev.replace(day=1)
+        return first_prev.isoformat(), last_prev.isoformat(), f"{first_prev:%B %Y}"
+    if t in ("year", "ytd", "this year", "год"):
+        first = today.replace(month=1, day=1)
+        return first.isoformat(), today.isoformat(), f"{today:%Y} (YTD)"
 
     # Named month, optionally followed by a 4-digit year. Without a year we pick
     # the most recent occurrence: this year if the month has started, else last.
