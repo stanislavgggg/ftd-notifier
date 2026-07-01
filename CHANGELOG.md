@@ -64,3 +64,11 @@ process (background poll thread + FastAPI).
   noted so nothing silently disappears.
 - Brand/tracker leaderboards now include signup-only rows (activity = FTD OR
   signups); pure 0/0 rows stay excluded.
+
+## v1.4 — reconciliation + settling convergence
+- `/ftd trackers` now shows a reconciliation footer: "Tracked X of Y FTD · … the
+  rest is traffic with no tracker tag" — the L3-vs-site gap is expected (untagged
+  traffic can't be attributed to a campaign) and is now explicit, not "missing".
+- `RESETTLE_DAYS`/`RESETTLE_HOURS` (opt-in): periodically re-scrape recent days
+  and refresh the store WITHOUT firing pings, so month totals converge with a
+  fresh Voonix query as late data settles (frozen backfill days get updated).

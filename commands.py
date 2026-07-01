@@ -244,7 +244,8 @@ def handle(text: str) -> dict:
         period, limit = _split_modifier(parts[1:])
         start, end, label = util.parse_period(period)
         rows = store.tracker_leaderboard(start, end, limit)
-        tot = store.tracker_grand_total(start, end)
+        tot = store.tracker_grand_total(start, end)          # tracked (L3) totals
+        site = store.grand_total(start, end)                 # site/brand (L1) totals
         scope = "All" if limit is None else "Top"
         head = (f"📊 *{scope} trackers — {label}*  ·  {len(rows)} with activity\n"
                 f"Total: *{int(tot['ftd'])} FTD* · {int(tot['signups'])} signups")
@@ -252,6 +253,16 @@ def handle(text: str) -> dict:
                  f"{int(r['ftd'])} FTD · {int(r['signups'])} signups"
                  for i, r in enumerate(rows)]
         blocks = _chunk_blocks(head, lines)
+        # Reconciliation: tracked + untagged = site total. Makes the (expected)
+        # gap between L3 campaigns and the site total explicit, not "lost" data.
+        u_ftd = int(site["ftd"]) - int(tot["ftd"])
+        u_su = int(site["signups"]) - int(tot["signups"])
+        if u_ftd > 0 or u_su > 0:
+            blocks.append(_section(
+                f"🔎 Tracked *{int(tot['ftd'])}* of *{int(site['ftd'])}* FTD · "
+                f"{int(tot['signups'])} of {int(site['signups'])} signups — "
+                f"the rest ({max(0,u_ftd)} FTD · {max(0,u_su)} signups) is traffic "
+                f"with no tracker tag (or not yet backfilled)."))
     elif sub == "brand":
         if len(parts) < 2:
             blocks = [_section("Usage: `/ftd brand <name> [period]` — e.g. `/ftd brand iWild week`")]

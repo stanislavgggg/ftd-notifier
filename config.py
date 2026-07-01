@@ -64,6 +64,13 @@ LOOKBACK_DAYS = int(os.environ.get("LOOKBACK_DAYS", "2"))                      #
 # poller clears the cache for recent days before reading. Diagnostics (the cache
 # age) are always logged regardless.
 BUST_VOONIX_CACHE = _bool("BUST_VOONIX_CACHE", True)
+# Backfilled/older days are frozen at their scrape-time value, but Voonix keeps
+# revising recent days as data settles — so month totals drift from a fresh
+# Voonix query. When RESETTLE_DAYS>0, every RESETTLE_HOURS the poller re-scrapes
+# the last N days and refreshes the store (WITHOUT firing pings), so totals
+# converge. 0 = off. Recommended: 14 days / 6h.
+RESETTLE_DAYS = int(os.environ.get("RESETTLE_DAYS", "0"))
+RESETTLE_HOURS = float(os.environ.get("RESETTLE_HOURS", "6"))
 # Optional active window in UTC hours, e.g. "6-23". Outside it the loop sleeps
 # without scraping. Empty = run 24/7.
 ACTIVE_HOURS_UTC = os.environ.get("ACTIVE_HOURS_UTC", "").strip()

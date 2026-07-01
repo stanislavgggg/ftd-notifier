@@ -246,12 +246,41 @@ def maybe_refresh_trackers():
         print(f"   ⚠️ Tracker refresh failed: {e}")
 
 
+_last_resettle = 0.0
+
+
+def maybe_resettle():
+    """Every RESETTLE_HOURS, re-scrape the last RESETTLE_DAYS and refresh the
+    store WITHOUT diffing/notifying — so frozen backfill days pick up Voonix's
+    later revisions and month totals converge. Off when RESETTLE_DAYS<=0."""
+    global _last_resettle
+    if config.RESETTLE_DAYS <= 0:
+        return
+    now = time.time()
+    if now - _last_resettle < config.RESETTLE_HOURS * 3600:
+        return
+    import asyncio
+    from datetime import timedelta
+    today = datetime.now(timezone.utc).date()
+    days = [(today - timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range(config.RESETTLE_DAYS)]
+    print(f"♻️  Resettling {len(days)} days ({days[-1]} … {days[0]}) — store refresh only")
+    try:
+        rows = asyncio.run(voonix_client.scrape_once(dates=days))
+        store.upsert_rows(rows)                 # refresh store; do NOT call process()
+        _last_resettle = now
+        print(f"   ✅ Resettle updated {len(rows)} brand-days")
+    except Exception as e:
+        print(f"   ⚠️ Resettle failed: {e}")
+
+
 def poll_loop():
     _seed_from_store()
     backfill()
     while True:
         try:
             one_cycle()
+            maybe_resettle()
         except Exception as e:
             print(f"❌ Cycle error (will retry next interval): {e}")
         if config.RUN_ONCE:
