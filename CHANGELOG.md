@@ -72,3 +72,15 @@ process (background poll thread + FastAPI).
 - `RESETTLE_DAYS`/`RESETTLE_HOURS` (opt-in): periodically re-scrape recent days
   and refresh the store WITHOUT firing pings, so month totals converge with a
   fresh Voonix query as late data settles (frozen backfill days get updated).
+
+## v1.5 — readability
+- Command output redesigned for scannability: removed medals/numbering and
+  decorative emoji, each row is a bold name + metrics on its own line with a
+  blank line between rows, and counts use thousands separators. Sections stay in
+  separate Slack blocks. `all` lists chunk the same way.
+
+## v1.6 — compact layout
+- Removed blank lines between rows (one-line rows, tight). Section titles now
+  carry an emoji anchor (🌍 By source, 🏆 Top brands, 🎯 Top trackers) so they
+  stand out from the bold row names instead of blending in. Sections remain
+  separate Slack blocks for group spacing.
