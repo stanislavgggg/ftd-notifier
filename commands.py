@@ -115,10 +115,10 @@ def _overview(start: str, end: str, label: str) -> list[dict]:
         _section(f"📊 *FTD — {label}*\n"
                  f"{_n(tot['ftd'])} FTD · {util.eur(tot['deposit_value'])} · {_n(tot['signups'])} signups"),
         _section("🌍 *By source*\n" + _rows(src, _row_source, "no data yet")),
-        _section("🏆 *Top brands*\n" + _rows(store.top_brands(start, end, 5), _row_brand, "no FTDs yet")),
+        _section("🏆 *Brands*\n" + _rows(store.top_brands(start, end, 5), _row_brand, "no FTDs yet")),
     ]
     if config.TRACKER_SITES:
-        blocks.append(_section("🎯 *Top trackers*\n"
+        blocks.append(_section("🎯 *Trackers*\n"
                                + _rows(store.tracker_leaderboard(start, end, 5), _row_tracker, "no tracker data yet")))
     return blocks
 
