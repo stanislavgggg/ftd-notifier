@@ -20,6 +20,43 @@ import config
 
 app = FastAPI(title="FTD Notifier")
 
+_EMAIL_CACHE: dict[str, str] = {}
+
+
+def _email_for(user_id: str | None) -> str | None:
+    """Resolve a Slack user's account email via users.info (cached). Needs the
+    bot token + users:read.email scope."""
+    if not user_id or not config.SLACK_BOT_TOKEN:
+        return None
+    if user_id in _EMAIL_CACHE:
+        return _EMAIL_CACHE[user_id]
+    import requests
+    try:
+        r = requests.get("https://slack.com/api/users.info",
+                         headers={"Authorization": f"Bearer {config.SLACK_BOT_TOKEN}"},
+                         params={"user": user_id}, timeout=8).json()
+        email = ((r.get("user") or {}).get("profile") or {}).get("email")
+        if email:
+            email = email.lower()
+            _EMAIL_CACHE[user_id] = email
+        return email
+    except Exception as e:
+        print(f"   ⚠️ users.info failed: {e}")
+        return None
+
+
+def _user_allowed(user_id: str | None) -> bool:
+    """Gate access by Slack user ID and/or account email. Empty allowlists =
+    everyone. Email checks fail closed if the email can't be resolved."""
+    if not (config.ALLOWED_USERS or config.ALLOWED_EMAILS):
+        return True
+    if user_id and user_id in config.ALLOWED_USERS:
+        return True
+    if config.ALLOWED_EMAILS:
+        email = _email_for(user_id)
+        return bool(email and email in config.ALLOWED_EMAILS)
+    return False
+
 
 def _verify_slack(raw_body: bytes, headers) -> bool:
     """True if the request is a genuine, recent Slack request."""
@@ -60,6 +97,9 @@ async def slack_commands(request: Request):
     # Slack sends application/x-www-form-urlencoded
     from urllib.parse import parse_qs
     form = {k: v[0] for k, v in parse_qs(raw.decode()).items()}
+    if not _user_allowed(form.get("user_id")):
+        return JSONResponse({"response_type": "ephemeral",
+                             "text": "🔒 You don't have access to this bot. Ask an admin to add you."})
     text = form.get("text", "")
 
     try:
@@ -89,6 +129,8 @@ async def slack_interactions(request: Request):
     if "payload" not in form:
         return JSONResponse({})
     payload = json.loads(form["payload"][0])
+    if not _user_allowed((payload.get("user") or {}).get("id")):
+        return JSONResponse({})
     actions = payload.get("actions") or []
     if not actions:
         return JSONResponse({})
@@ -147,5 +189,23 @@ async def slack_events(request: Request):
         return PlainTextResponse("invalid signature", status_code=401)
     ev = data.get("event", {})
     if ev.get("type") == "app_home_opened":
-        _publish_home(ev.get("user"))
+        user = ev.get("user")
+        if _user_allowed(user):
+            _publish_home(user)
+        else:
+            _publish_home_denied(user)
     return JSONResponse({})
+
+
+def _publish_home_denied(user_id: str | None):
+    if not config.SLACK_BOT_TOKEN or not user_id:
+        return
+    import requests
+    view = {"type": "home", "blocks": [{"type": "section", "text": {"type": "mrkdwn",
+            "text": "🔒 *No access*\nYou don't have access to this dashboard. Ask an admin to add you."}}]}
+    try:
+        requests.post("https://slack.com/api/views.publish",
+                      headers={"Authorization": f"Bearer {config.SLACK_BOT_TOKEN}"},
+                      json={"user_id": user_id, "view": view}, timeout=10)
+    except Exception as e:
+        print(f"   ⚠️ views.publish (denied) failed: {e}")

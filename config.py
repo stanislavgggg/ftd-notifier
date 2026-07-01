@@ -131,6 +131,14 @@ DAILY_SUMMARY_HOUR_UTC = int(os.environ.get("DAILY_SUMMARY_HOUR_UTC", "-1"))
 MORNING_REPORT_HOUR_UTC = int(os.environ.get("MORNING_REPORT_HOUR_UTC", "5"))
 ENABLE_RECORDS = _bool("ENABLE_RECORDS", True)
 
+# --- Access control: restrict who can use commands / buttons / Home.
+# ALLOWED_USERS: Slack user IDs (e.g. "U0123ABC,U0456DEF").
+# ALLOWED_EMAILS: Slack account emails (e.g. "a@x.com,b@x.com"); resolving an
+#   email needs the bot token + the users:read.email scope.
+# Both empty = everyone in the workspace is allowed (default).
+ALLOWED_USERS = {u.strip() for u in os.environ.get("ALLOWED_USERS", "").replace(",", " ").split() if u.strip()}
+ALLOWED_EMAILS = {e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "").replace(",", " ").split() if e.strip()}
+
 # --- One-time history backfill (so week/month commands aren't empty at launch)
 # >0 -> on startup, scrape the last N days per site into the store (idempotent).
 BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "0"))

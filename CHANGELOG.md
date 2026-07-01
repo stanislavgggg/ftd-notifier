@@ -123,3 +123,14 @@ process (background poll thread + FastAPI).
   leaderboard/overview; store leaderboards gained an order_by param.
 - /ftd now [minutes]: new FTDs in the last hour (default 60), by source + brand.
   Backed by a new ftd_events journal the notifier writes on each detected rise.
+
+## v2.2 — access control
+- ALLOWED_USERS env var (comma/space-separated Slack user IDs) gates commands,
+  button/dropdown interactions, and the App Home dashboard. Empty = everyone
+  (default). Denied users get a polite "no access" message / Home view.
+
+## v2.3 — allowlist by email
+- ALLOWED_EMAILS env var (comma/space-separated) gates access by Slack account
+  email, resolved via users.info (cached). Requires bot token + users:read.email.
+  Case-insensitive; email checks fail closed if unresolved. ALLOWED_USERS (IDs)
+  still works and both can be combined.
