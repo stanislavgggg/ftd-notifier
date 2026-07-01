@@ -156,7 +156,7 @@ async def _navigate(page, params: str):
     await page.wait_for_timeout(1000)
 
 
-async def _download_l1_csv(page, site_id: str, date_str: str) -> tuple[list[str], list[list[str]]] | None:
+async def _download_l1_csv(page, site_id: str, date_str: str, bust: bool = False) -> tuple[list[str], list[list[str]]] | None:
     """Download the L1 (per-advertiser) earnings CSV for one site+day."""
     params = f"?p=siteearnings&start={date_str}&end={date_str}&site={site_id}&&submit"
     path = f"{DOWNLOAD_DIR}/l1_{site_id}_{date_str}.csv"
@@ -166,6 +166,10 @@ async def _download_l1_csv(page, site_id: str, date_str: str) -> tuple[list[str]
     for attempt in range(3):
         try:
             await _navigate(page, params)
+            # Fresh data before reading: log cache age and (for recent days) clear it.
+            await _handle_cache(page, bust=bust)
+            if bust:
+                await _navigate(page, params)  # reload the now-uncached report
             await page.wait_for_selector(CSV_SELECTOR, timeout=20000)
             async with page.expect_download(timeout=30000) as dl:
                 await page.evaluate(
@@ -202,6 +206,47 @@ async def _download_l1_csv(page, site_id: str, date_str: str) -> tuple[list[str]
         print(f"   🔍 Debug dump failed: {de}")
     print(f"   ❌ No L1 CSV (site={site_id} {date_str})")
     return None
+
+
+async def _handle_cache(page, bust: bool):
+    """Log Voonix's cache age and, when `bust`, clear it so we read fresh data.
+
+    Voonix caches the siteearnings report server-side ("Cache active - created N
+    ago" banner). A frozen cache is why intraday FTD rises are invisible. We
+    always LOG the age (proves freshness in the deploy logs); when busting we
+    click the on-page "Clear cache" control and reload. All best-effort — never
+    raises, so a UI change can't break the scrape (it just logs and continues)."""
+    try:
+        age = await page.evaluate(
+            """() => {
+                const el = [...document.querySelectorAll('*')]
+                  .find(e => /cache active/i.test(e.textContent||'') && e.children.length < 3);
+                return el ? el.textContent.replace(/\\s+/g,' ').trim().slice(0,80) : null;
+            }"""
+        )
+        if age:
+            print(f"      🕒 {age}")
+    except Exception:
+        pass
+    if not bust:
+        return
+    try:
+        clicked = await page.evaluate(
+            """() => {
+                const el = [...document.querySelectorAll('a,button,input')]
+                  .find(e => /clear cache/i.test((e.textContent||'') + ' ' + (e.value||'')));
+                if (el) { el.click(); return true; }
+                return false;
+            }"""
+        )
+        if clicked:
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except Exception:
+                pass
+            await page.wait_for_timeout(1500)
+    except Exception as e:
+        print(f"      ⚠️ cache clear skipped: {e}")
 
 
 def _col(header: list[str], *names: str) -> int:
@@ -408,7 +453,7 @@ async def scrape_trackers_once(dates: list[str] | None = None,
             for date_str in dates:
                 adve_list = await _get_link_ids(page, _ts_params(site_id, None, None, date_str), "adve")
                 print(f"   📅 {date_str} {site_label}: {len(adve_list)} advertisers")
-                for adve_id, _ in adve_list:
+                for adve_id, adve_name in adve_list:
                     login_list = await _get_link_ids(
                         page, _ts_params(site_id, adve_id, None, date_str), "login")
                     for login_id, _ in login_list:
@@ -425,7 +470,8 @@ async def scrape_trackers_once(dates: list[str] | None = None,
                         for r in _parse_brand_rows(header, rows):  # row[0] = campaign name
                             results.append({
                                 "date": date_str, "site_id": site_id, "site_label": site_label,
-                                "campaign": r["brand"], "ftd": r["ftd"], "signups": r["signups"],
+                                "campaign": r["brand"], "brand": adve_name,
+                                "ftd": r["ftd"], "signups": r["signups"],
                                 "deposits": r["deposits"], "deposit_value": r["deposit_value"],
                             })
         try:
@@ -504,9 +550,13 @@ async def scrape_once(dates: list[str] | None = None) -> list[dict]:
             except Exception as e:
                 print(f"🧭 Auto-discover failed ({e}) — using configured SITES.")
 
+        # Only bust the cache for recent days (today/yesterday) — those change
+        # intraday. Settled/backfill days are read from cache (fast, harmless).
+        recent = set(utc_dates(2))
         for site_id, site_label in sites:
             for date_str in dates:
-                got = await _download_l1_csv(page, site_id, date_str)
+                bust = config.BUST_VOONIX_CACHE and date_str in recent
+                got = await _download_l1_csv(page, site_id, date_str, bust=bust)
                 if not got:
                     continue
                 header, rows = got

@@ -63,6 +63,7 @@ def conn() -> sqlite3.Connection:
                 site_id       TEXT NOT NULL,
                 site_label    TEXT NOT NULL,
                 campaign      TEXT NOT NULL,
+                brand         TEXT NOT NULL DEFAULT '',
                 ftd           INTEGER NOT NULL DEFAULT 0,
                 signups       INTEGER NOT NULL DEFAULT 0,
                 deposits      INTEGER NOT NULL DEFAULT 0,
@@ -71,6 +72,11 @@ def conn() -> sqlite3.Connection:
                 PRIMARY KEY (date, site_id, campaign)
             )
         """)
+        # Migrate DBs created before `brand` existed on trackers (no-op if present).
+        try:
+            _conn.execute("ALTER TABLE tracker_daily ADD COLUMN brand TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_td_date ON tracker_daily(date)")
         _conn.commit()
         _migrate_clean_tracker_names(_conn)
@@ -244,6 +250,7 @@ def upsert_tracker_rows(rows: list[dict]):
         if a is None:
             a = {"date": r["date"], "site_id": r["site_id"],
                  "site_label": r.get("site_label", ""), "campaign": campaign,
+                 "brand": r.get("brand", "") or "",
                  "ftd": 0, "signups": 0, "deposits": 0, "deposit_value": 0.0}
             agg[key] = a
         a["ftd"] += r.get("ftd") or 0
@@ -252,6 +259,8 @@ def upsert_tracker_rows(rows: list[dict]):
         a["deposit_value"] += r.get("deposit_value") or 0.0
         if r.get("site_label"):
             a["site_label"] = r["site_label"]
+        if r.get("brand"):
+            a["brand"] = r["brand"]
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
     norm = [{**a, "now": now} for a in agg.values()]
@@ -259,10 +268,11 @@ def upsert_tracker_rows(rows: list[dict]):
         c = conn()
         c.executemany("""
             INSERT INTO tracker_daily
-              (date, site_id, site_label, campaign, ftd, signups, deposits, deposit_value, updated_at)
-            VALUES (:date, :site_id, :site_label, :campaign, :ftd, :signups, :deposits, :deposit_value, :now)
+              (date, site_id, site_label, campaign, brand, ftd, signups, deposits, deposit_value, updated_at)
+            VALUES (:date, :site_id, :site_label, :campaign, :brand, :ftd, :signups, :deposits, :deposit_value, :now)
             ON CONFLICT(date, site_id, campaign) DO UPDATE SET
               site_label    = excluded.site_label,
+              brand         = CASE WHEN excluded.brand != '' THEN excluded.brand ELSE tracker_daily.brand END,
               ftd           = excluded.ftd,
               signups       = excluded.signups,
               deposits      = excluded.deposits,
@@ -294,11 +304,12 @@ def tracker_grand_total(start: str, end: str) -> dict:
 
 def tracker_leaderboard(start: str, end: str, limit: int = 10) -> list[dict]:
     cur = conn().execute("""
-        SELECT campaign, site_label,
+        SELECT campaign, site_label, MAX(brand) AS brand,
                SUM(ftd) AS ftd, SUM(signups) AS signups
         FROM tracker_daily
         WHERE date BETWEEN ? AND ?
         GROUP BY campaign, site_label
+        HAVING SUM(ftd) > 0 OR SUM(signups) > 0
         ORDER BY ftd DESC, signups DESC
         LIMIT ?
     """, (start, end, limit))
@@ -306,14 +317,103 @@ def tracker_leaderboard(start: str, end: str, limit: int = 10) -> list[dict]:
 
 
 def tracker_search(query: str, start: str, end: str, limit: int = 25) -> list[dict]:
-    """Campaigns whose name contains `query` (case-insensitive), with totals."""
+    """Campaigns whose name contains `query` (case-insensitive), with totals.
+    Drops pure 0-FTD/0-signup noise so a search for a live tracker stays clean."""
     cur = conn().execute("""
-        SELECT campaign, site_label,
+        SELECT campaign, site_label, MAX(brand) AS brand,
                SUM(ftd) AS ftd, SUM(signups) AS signups
         FROM tracker_daily
         WHERE date BETWEEN ? AND ? AND campaign LIKE ? COLLATE NOCASE
         GROUP BY campaign, site_label
+        HAVING SUM(ftd) > 0 OR SUM(signups) > 0
         ORDER BY ftd DESC, signups DESC
         LIMIT ?
     """, (start, end, f"%{query}%", limit))
+    return [dict(r) for r in cur.fetchall()]
+
+
+# --- Drilldown queries (one brand / one source) ----------------------------
+
+def brand_by_source(name: str, start: str, end: str) -> list[dict]:
+    """One advertiser (matched by substring) split by traffic source."""
+    cur = conn().execute("""
+        SELECT site_label, MAX(brand) AS brand,
+               SUM(ftd) AS ftd, SUM(signups) AS signups,
+               SUM(deposit_value) AS deposit_value
+        FROM brand_daily
+        WHERE date BETWEEN ? AND ? AND brand LIKE ? COLLATE NOCASE
+        GROUP BY site_label
+        HAVING SUM(ftd) > 0 OR SUM(signups) > 0
+        ORDER BY ftd DESC
+    """, (start, end, f"%{name}%"))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def brand_trackers(name: str, start: str, end: str, limit: int = 10) -> list[dict]:
+    """Top trackers driving a given advertiser (needs tracker `brand`, populated
+    on scrapes after this upgrade)."""
+    cur = conn().execute("""
+        SELECT campaign, site_label,
+               SUM(ftd) AS ftd, SUM(signups) AS signups
+        FROM tracker_daily
+        WHERE date BETWEEN ? AND ? AND brand LIKE ? COLLATE NOCASE
+        GROUP BY campaign, site_label
+        HAVING SUM(ftd) > 0 OR SUM(signups) > 0
+        ORDER BY ftd DESC, signups DESC
+        LIMIT ?
+    """, (start, end, f"%{name}%", limit))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def source_brands(site_label: str, start: str, end: str, limit: int = 15) -> list[dict]:
+    cur = conn().execute("""
+        SELECT brand, SUM(ftd) AS ftd, SUM(signups) AS signups,
+               SUM(deposit_value) AS deposit_value
+        FROM brand_daily
+        WHERE date BETWEEN ? AND ? AND site_label = ? COLLATE NOCASE
+        GROUP BY brand
+        HAVING SUM(ftd) > 0 OR SUM(signups) > 0
+        ORDER BY ftd DESC, signups DESC
+        LIMIT ?
+    """, (start, end, site_label, limit))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def source_trackers(site_label: str, start: str, end: str, limit: int = 10) -> list[dict]:
+    cur = conn().execute("""
+        SELECT campaign, SUM(ftd) AS ftd, SUM(signups) AS signups
+        FROM tracker_daily
+        WHERE date BETWEEN ? AND ? AND site_label = ? COLLATE NOCASE
+        GROUP BY campaign
+        HAVING SUM(ftd) > 0 OR SUM(signups) > 0
+        ORDER BY ftd DESC, signups DESC
+        LIMIT ?
+    """, (start, end, site_label, limit))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def conversion_by_source(start: str, end: str) -> list[dict]:
+    """Signup→FTD conversion per source (how well traffic converts to deposits)."""
+    cur = conn().execute("""
+        SELECT site_label, SUM(ftd) AS ftd, SUM(signups) AS signups
+        FROM brand_daily
+        WHERE date BETWEEN ? AND ?
+        GROUP BY site_label
+        HAVING SUM(signups) > 0 OR SUM(ftd) > 0
+        ORDER BY ftd DESC
+    """, (start, end))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def brand_state(dates: list[str]) -> list[dict]:
+    """Raw per (date, site, brand) current values for the given days — used to
+    seed the notifier's diff thresholds from the store on startup, so a restart
+    resumes detection instead of silently re-baselining."""
+    if not dates:
+        return []
+    qs = ",".join("?" * len(dates))
+    cur = conn().execute(f"""
+        SELECT date, site_id, brand, ftd, deposit_value
+        FROM brand_daily WHERE date IN ({qs})
+    """, dates)
     return [dict(r) for r in cur.fetchall()]

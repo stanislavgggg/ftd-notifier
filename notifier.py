@@ -36,6 +36,29 @@ except Exception:
 _seen: dict[tuple[str, str, str], dict] = {}
 _baselined = False
 
+
+def _seed_from_store():
+    """Load the last-known FTD per (date, site, brand) for the lookback window
+    from SQLite into the diff thresholds. This means a redeploy RESUMES detection
+    (and catches up on any rise that happened while we were down) instead of
+    silently re-baselining and swallowing the day's FTDs — the main reason pings
+    went missing during active development."""
+    global _baselined
+    from datetime import timedelta
+    today = datetime.now(timezone.utc).date()
+    dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d")
+             for i in range(max(1, config.LOOKBACK_DAYS))]
+    seeded = 0
+    for r in store.brand_state(dates):
+        _seen[(r["date"], r["site_id"], r["brand"])] = {
+            "ftd": r["ftd"], "deposit_value": r["deposit_value"]}
+        seeded += 1
+    if seeded:
+        _baselined = True
+        print(f"🌱 Seeded {seeded} thresholds from store — resuming detection (no silent baseline).")
+    else:
+        print("🌱 Store empty for the window — first cycle will be a silent baseline.")
+
 # How many days each resumable backfill chunk scrapes before saving progress.
 BACKFILL_CHUNK = 15
 # Tracker scraping is ~150 requests/day per site, so save progress more often.
@@ -109,7 +132,16 @@ def process(rows: list[dict]):
     summary.maybe_post_daily_summary(now)
     summary.maybe_post_morning_report(now)
 
-    print(f"   ↳ cycle done: {len(rows)} brand-days scanned, {notifications} notification(s) sent")
+    # Movement diagnostic: today's scanned FTD per source. If these numbers never
+    # rise between cycles, the polled data is frozen (Voonix cache) rather than a
+    # diff bug — this line makes that visible in the deploy logs.
+    today = now.date().isoformat()
+    by_src: dict[str, int] = {}
+    for r in rows:
+        if r["date"] == today:
+            by_src[r["site_label"]] = by_src.get(r["site_label"], 0) + r["ftd"]
+    movement = " ".join(f"{k}={v}" for k, v in sorted(by_src.items())) or "—"
+    print(f"   ↳ cycle done: {len(rows)} brand-days, {notifications} ping(s) | today FTD: {movement}")
 
 
 def one_cycle():
@@ -215,6 +247,7 @@ def maybe_refresh_trackers():
 
 
 def poll_loop():
+    _seed_from_store()
     backfill()
     while True:
         try:

@@ -37,3 +37,20 @@ process (background poll thread + FastAPI).
 - **One-time backfill** (`BACKFILL_DAYS`) seeds history so week/month commands
   aren't empty right after launch.
 - `/health` + `/` endpoints for Railway.
+
+## v1.2 — fix missing pings + clean output + drilldowns
+- **FIX (no notifications):** the poller now busts Voonix's server-side report
+  cache for today/yesterday before reading (`BUST_VOONIX_CACHE`, default on).
+  A frozen cache meant every poll saw identical numbers, so no FTD rise was ever
+  detected. Cache age is now logged every cycle, and a per-cycle "today FTD by
+  source" line makes movement (or lack of it) visible in the deploy logs.
+- **FIX (restart swallowed FTDs):** detection thresholds are seeded from the
+  SQLite store on startup, so a redeploy resumes detection (and catches up on
+  rises during downtime) instead of silently re-baselining the day.
+- **Cleaner output:** tracker leaderboard/search drop 0-FTD/0-signup noise;
+  long campaign/brand names truncated; overview shows € deposit again.
+- **New drilldown commands:** `/ftd brand <name>` (one advertiser split by
+  source + its trackers), `/ftd source <LABEL>` (brands + trackers under one
+  source), `/ftd conv [period]` (signup→FTD conversion by source).
+- Tracker rows now store their **brand** (advertiser), enabling the per-brand
+  tracker view. Historical tracker rows get brands as they're re-scraped.

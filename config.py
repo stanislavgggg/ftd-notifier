@@ -58,6 +58,12 @@ TRACKER_REFRESH_HOURS = float(os.environ.get("TRACKER_REFRESH_HOURS", "6"))
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "900"))   # 15 min
 # Also re-check yesterday so late-settling FTDs still fire a notification.
 LOOKBACK_DAYS = int(os.environ.get("LOOKBACK_DAYS", "2"))                      # today + yesterday
+# Voonix serves the siteearnings report from a server-side cache (see the
+# "Cache active - created N ago" banner). Without busting it, every poll reads
+# the SAME frozen numbers and no FTD rise is ever detected. When true, the
+# poller clears the cache for recent days before reading. Diagnostics (the cache
+# age) are always logged regardless.
+BUST_VOONIX_CACHE = _bool("BUST_VOONIX_CACHE", True)
 # Optional active window in UTC hours, e.g. "6-23". Outside it the loop sleeps
 # without scraping. Empty = run 24/7.
 ACTIVE_HOURS_UTC = os.environ.get("ACTIVE_HOURS_UTC", "").strip()
