@@ -138,7 +138,7 @@ def _brand_blocks(name: str, start: str, end: str, label: str) -> list[dict]:
     ]
     trk = store.brand_trackers(name, start, end, 10)
     if trk:
-        blocks.append(_section("🎯 *Top trackers*\n" + _rows(trk, _row_tracker, "—")))
+        blocks.append(_section("🎯 *Trackers*\n" + _rows(trk, _row_tracker, "—")))
     elif config.TRACKER_SITES:
         blocks.append(_section("_No tracker breakdown yet for this brand — it fills "
                                "in as trackers are re-scraped with brand tags._"))
@@ -202,19 +202,10 @@ def handle(text: str) -> dict:
         start, end, label = util.parse_period(period)
         rows = store.tracker_leaderboard(start, end, limit)
         tot = store.tracker_grand_total(start, end)
-        site = store.grand_total(start, end)
         scope = "All" if limit is None else "Top"
         head = (f"🎯 *{scope} trackers — {label}*  ·  {len(rows)} shown\n"
                 f"{_n(tot['ftd'])} FTD · {_n(tot['signups'])} signups")
         blocks = _chunk_blocks(head, [_row_tracker(r) for r in rows])
-        u_ftd = int(site["ftd"]) - int(tot["ftd"])
-        u_su = int(site["signups"]) - int(tot["signups"])
-        if u_ftd > 0 or u_su > 0:
-            blocks.append(_section(
-                f"_Tracked {_n(tot['ftd'])} of {_n(site['ftd'])} FTD · "
-                f"{_n(tot['signups'])} of {_n(site['signups'])} signups. The rest "
-                f"({_n(max(0,u_ftd))} FTD · {_n(max(0,u_su))} signups) is traffic with "
-                f"no tracker tag (or not yet backfilled)._"))
     elif sub == "brand":
         if len(parts) < 2:
             blocks = [_section("Usage: `/ftd brand <name> [period]` — e.g. `/ftd brand iWild week`")]

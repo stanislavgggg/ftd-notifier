@@ -84,3 +84,14 @@ process (background poll thread + FastAPI).
   carry an emoji anchor (🌍 By source, 🏆 Top brands, 🎯 Top trackers) so they
   stand out from the bold row names instead of blending in. Sections remain
   separate Slack blocks for group spacing.
+
+## v1.7 — header wording
+- Overview/drilldown section titles renamed "Top brands"→"Brands",
+  "Top trackers"→"Trackers" (consistent with the source drilldown). The
+  `/ftd trackers` command header still shows Top/All based on the limit.
+
+## v1.8 — drop reconciliation footer
+- Removed the "Tracked X of Y … no tracker tag" line from /ftd trackers. It was
+  misleading when tracker data for the period hadn't been refreshed yet (e.g.
+  today, since trackers refresh every ~6h) — showing "0 of N" as if data were
+  lost. The command now just lists the trackers it has.
