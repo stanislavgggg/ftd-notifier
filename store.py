@@ -78,6 +78,17 @@ def conn() -> sqlite3.Connection:
         except Exception:
             pass
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_td_date ON tracker_daily(date)")
+        _conn.execute("""
+            CREATE TABLE IF NOT EXISTS ftd_events (
+                ts          TEXT NOT NULL,
+                site_id     TEXT,
+                site_label  TEXT,
+                brand       TEXT,
+                ftd         INTEGER NOT NULL DEFAULT 0,
+                deposit     REAL    NOT NULL DEFAULT 0
+            )
+        """)
+        _conn.execute("CREATE INDEX IF NOT EXISTS idx_ev_ts ON ftd_events(ts)")
         _conn.commit()
         _migrate_clean_tracker_names(_conn)
     return _conn
@@ -159,9 +170,22 @@ def upsert_rows(rows: list[dict]):
 
 
 # --- read helpers ------------------------------------------------------------
-def totals_by_source(start: str, end: str) -> list[dict]:
+_ORDER = {"ftd": "ftd DESC, signups DESC",
+          "signups": "signups DESC, ftd DESC",
+          "deposit": "deposit_value DESC, ftd DESC",
+          "deposits": "deposit_value DESC, ftd DESC"}
+
+
+def _order_sql(order_by: str | None, has_deposit: bool = True) -> str:
+    key = (order_by or "ftd").lower()
+    if key in ("deposit", "deposits") and not has_deposit:
+        key = "ftd"
+    return _ORDER.get(key, _ORDER["ftd"])
+
+
+def totals_by_source(start: str, end: str, order_by: str | None = None) -> list[dict]:
     c = conn()
-    cur = c.execute("""
+    cur = c.execute(f"""
         SELECT site_label,
                SUM(ftd)           AS ftd,
                SUM(signups)       AS signups,
@@ -169,13 +193,13 @@ def totals_by_source(start: str, end: str) -> list[dict]:
         FROM brand_daily
         WHERE date BETWEEN ? AND ?
         GROUP BY site_label
-        ORDER BY ftd DESC
+        ORDER BY {_order_sql(order_by)}
     """, (start, end))
     return [dict(r) for r in cur.fetchall()]
 
 
-def top_brands(start: str, end: str, limit: int | None = 10) -> list[dict]:
-    q = """
+def top_brands(start: str, end: str, limit: int | None = 10, order_by: str | None = None) -> list[dict]:
+    q = f"""
         SELECT brand,
                site_label,
                SUM(ftd)           AS ftd,
@@ -185,7 +209,7 @@ def top_brands(start: str, end: str, limit: int | None = 10) -> list[dict]:
         WHERE date BETWEEN ? AND ?
         GROUP BY brand, site_label
         HAVING SUM(ftd) > 0 OR SUM(signups) > 0
-        ORDER BY ftd DESC, signups DESC
+        ORDER BY {_order_sql(order_by)}
     """
     params = [start, end]
     if limit is not None:
@@ -304,15 +328,15 @@ def tracker_grand_total(start: str, end: str) -> dict:
     return {"ftd": r["ftd"], "signups": r["signups"]}
 
 
-def tracker_leaderboard(start: str, end: str, limit: int | None = 10) -> list[dict]:
-    q = """
+def tracker_leaderboard(start: str, end: str, limit: int | None = 10, order_by: str | None = None) -> list[dict]:
+    q = f"""
         SELECT campaign, site_label, MAX(brand) AS brand,
                SUM(ftd) AS ftd, SUM(signups) AS signups
         FROM tracker_daily
         WHERE date BETWEEN ? AND ?
         GROUP BY campaign, site_label
         HAVING SUM(ftd) > 0 OR SUM(signups) > 0
-        ORDER BY ftd DESC, signups DESC
+        ORDER BY {_order_sql(order_by, has_deposit=False)}
     """
     params = [start, end]
     if limit is not None:
@@ -422,3 +446,30 @@ def brand_state(dates: list[str]) -> list[dict]:
         FROM brand_daily WHERE date IN ({qs})
     """, dates)
     return [dict(r) for r in cur.fetchall()]
+
+
+# --- FTD event journal (for /ftd now) ---------------------------------------
+def record_event(ts: str, site_id: str, site_label: str, brand: str,
+                 ftd: int, deposit: float):
+    with _lock:
+        c = conn()
+        c.execute("INSERT INTO ftd_events (ts, site_id, site_label, brand, ftd, deposit) "
+                  "VALUES (?,?,?,?,?,?)", (ts, site_id, site_label, brand, int(ftd), float(deposit)))
+        c.commit()
+
+
+def events_since(minutes: int) -> dict:
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    c = conn()
+    tot = c.execute("SELECT IFNULL(SUM(ftd),0) f, IFNULL(SUM(deposit),0) d "
+                    "FROM ftd_events WHERE ts >= ?", (cutoff,)).fetchone()
+    by_source = [dict(r) for r in c.execute(
+        "SELECT site_label, SUM(ftd) ftd, SUM(deposit) deposit FROM ftd_events "
+        "WHERE ts >= ? GROUP BY site_label HAVING SUM(ftd) > 0 ORDER BY ftd DESC", (cutoff,)).fetchall()]
+    by_brand = [dict(r) for r in c.execute(
+        "SELECT brand, MAX(site_label) site_label, SUM(ftd) ftd, SUM(deposit) deposit "
+        "FROM ftd_events WHERE ts >= ? GROUP BY brand HAVING SUM(ftd) > 0 "
+        "ORDER BY ftd DESC, deposit DESC LIMIT 15", (cutoff,)).fetchall()]
+    return {"ftd": int(tot["f"]), "deposit": float(tot["d"]),
+            "by_source": by_source, "by_brand": by_brand}

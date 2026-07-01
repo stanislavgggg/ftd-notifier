@@ -113,3 +113,13 @@ process (background poll thread + FastAPI).
 - Navigation preserves the real current period (incl. last month / this year)
   across view switches and entity picks — buttons/dropdowns re-render in place.
 - parse_period gained "last month" and "this year"/"ytd".
+
+## v2.1 — App Home, sort, /ftd now
+- App Home tab: opening the bot's Home publishes a live dashboard (today's
+  overview + full panel). /slack/events added (URL-verification + app_home_opened);
+  panel clicks in the Home tab refresh via views.publish. Requires SLACK_BOT_TOKEN
+  + enabling Home Tab and Event Subscriptions in the Slack app.
+- Sort dropdown on the panel (FTD / Signups / Deposits) re-sorts the current
+  leaderboard/overview; store leaderboards gained an order_by param.
+- /ftd now [minutes]: new FTDs in the last hour (default 60), by source + brand.
+  Backed by a new ftd_events journal the notifier writes on each detected rise.

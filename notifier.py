@@ -124,6 +124,12 @@ def process(rows: list[dict]):
                     notifications += 1
                 if bq_mirror:
                     bq_mirror.record(ev)
+                # Journal the event so /ftd now can show the last hour.
+                try:
+                    store.record_event(ev["ts"], ev["site_id"], ev["site_label"],
+                                       ev["brand"], ev["ftd_delta"], ev["deposit_delta"])
+                except Exception as e:
+                    print(f"   ⚠️ event journal failed: {e}")
 
         _seen[k] = {"ftd": r["ftd"], "deposit_value": r["deposit_value"]}
 

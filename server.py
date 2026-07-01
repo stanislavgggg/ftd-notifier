@@ -102,7 +102,7 @@ async def slack_interactions(request: Request):
     except Exception as e:
         return JSONResponse({"text": f"⚠️ {e}"})
 
-    # Update the original message in place (works for ephemeral and in-channel).
+    # Update in place: response_url for messages, views.publish for the Home tab.
     response_url = payload.get("response_url")
     if response_url:
         try:
@@ -110,4 +110,42 @@ async def slack_interactions(request: Request):
                                               "blocks": resp["blocks"]}, timeout=10)
         except Exception as e:
             print(f"   ⚠️ interaction update failed: {e}")
+    else:
+        _publish_home((payload.get("user") or {}).get("id"), resp["blocks"])
+    return JSONResponse({})
+
+
+def _publish_home(user_id: str | None, blocks: list | None = None):
+    """Publish (or refresh) the App Home dashboard for a user. Requires a bot
+    token; no-op without one. Defaults to today's overview when no blocks given."""
+    if not config.SLACK_BOT_TOKEN or not user_id:
+        return
+    import requests
+    import commands
+    if blocks is None:
+        blocks = commands.handle("today")["blocks"]
+    try:
+        requests.post("https://slack.com/api/views.publish",
+                      headers={"Authorization": f"Bearer {config.SLACK_BOT_TOKEN}"},
+                      json={"user_id": user_id, "view": {"type": "home", "blocks": blocks[:100]}},
+                      timeout=10)
+    except Exception as e:
+        print(f"   ⚠️ views.publish failed: {e}")
+
+
+@app.post("/slack/events")
+async def slack_events(request: Request):
+    """Events API: URL verification handshake + publish the Home dashboard when a
+    user opens the app's Home tab."""
+    import json
+
+    raw = await request.body()
+    data = json.loads(raw.decode() or "{}")
+    if data.get("type") == "url_verification":          # setup handshake
+        return JSONResponse({"challenge": data.get("challenge", "")})
+    if not _verify_slack(raw, request.headers):
+        return PlainTextResponse("invalid signature", status_code=401)
+    ev = data.get("event", {})
+    if ev.get("type") == "app_home_opened":
+        _publish_home(ev.get("user"))
     return JSONResponse({})

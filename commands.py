@@ -19,6 +19,7 @@ HELP = (
     "`/ftd source <MAIL|META|COM> [period]` — one source: brands + trackers\n"
     "`/ftd tracker <name> [period]` — one tracker (e.g. `/ftd tracker LG week`)\n"
     "`/ftd conv [period]` — signup→FTD conversion by source\n"
+    "`/ftd now [minutes]` — new FTDs in the last hour (default 60m)\n"
     "`/ftd menu` — buttons & dropdowns (pin it as a remote)\n"
     "`/ftd help`"
 )
@@ -185,9 +186,14 @@ def _panel(view: str, period_text: str, start: str, end: str) -> list[dict]:
                                 for t in trks]))
     blocks.append({"type": "actions", "elements": selects})
 
-    blocks.append({"type": "actions", "elements": [
-        {"type": "button", "text": {"type": "plain_text", "text": "Open in Voonix ↗"},
-         "url": _voonix_url(start, end), "action_id": "open_voonix"}]})
+    # Row 4: sort (re-sorts the current view) + jump to Voonix
+    sorts = [_select("pick_sort", "Sort →", [
+        _opt("Sort: FTD", f"sort:{view}:{pt}:ftd"),
+        _opt("Sort: Signups", f"sort:{view}:{pt}:signups"),
+        _opt("Sort: Deposits", f"sort:{view}:{pt}:deposit")])]
+    voonix_btn = {"type": "button", "text": {"type": "plain_text", "text": "Open in Voonix ↗"},
+                  "url": _voonix_url(start, end), "action_id": "open_voonix"}
+    blocks.append({"type": "actions", "elements": sorts + [voonix_btn]})
     return blocks
 
 
@@ -200,6 +206,45 @@ def _tracker_search_blocks(name: str, start: str, end: str, label: str) -> list[
     head = (f'🎯 *Tracker "{name}" — {label}*  ·  {len(rows)} matched\n'
             f"{_n(ftd)} FTD · {_n(su)} signups")
     return _chunk_blocks(head, [_row_tracker(r) for r in rows])
+
+
+def render_view(view: str, period_text: str, order_by: str) -> dict:
+    """Re-render a leaderboard/overview for a period with a chosen sort order."""
+    start, end, label = util.parse_period(period_text)
+    if view == "sources":
+        src = [r for r in store.totals_by_source(start, end, order_by) if r["ftd"] or r["signups"]]
+        blocks = [_section(f"🌍 *Sources — {label}*\n" + _rows(src, _row_source, "no data yet"))]
+    elif view == "brands":
+        rows = store.top_brands(start, end, 10, order_by)
+        tot = store.grand_total(start, end)
+        head = (f"🏆 *Brands — {label}*  ·  {len(rows)} shown\n"
+                f"{_n(tot['ftd'])} FTD · {util.eur(tot['deposit_value'])} · {_n(tot['signups'])} signups")
+        blocks = _chunk_blocks(head, [_row_brand(r) for r in rows])
+    elif view == "trackers":
+        rows = store.tracker_leaderboard(start, end, 10, order_by)
+        tot = store.tracker_grand_total(start, end)
+        head = (f"🎯 *Top trackers — {label}*  ·  {len(rows)} shown\n"
+                f"{_n(tot['ftd'])} FTD · {_n(tot['signups'])} signups")
+        blocks = _chunk_blocks(head, [_row_tracker(r) for r in rows])
+    else:
+        blocks = _overview(start, end, label, order_by)
+    blocks += _panel(view, period_text, start, end)
+    return {"response_type": config.COMMAND_RESPONSE_TYPE, "blocks": blocks}
+
+
+def _now_blocks(minutes: int) -> list[dict]:
+    d = store.events_since(minutes)
+    if d["ftd"] == 0:
+        return [_section(f"⚡ *Last {minutes} min*\n_No new FTDs in this window yet._")]
+    blocks = [_section(f"⚡ *Last {minutes} min*\n{_n(d['ftd'])} FTD · {util.eur(d['deposit'])}")]
+    if d["by_source"]:
+        blocks.append(_section("🌍 *By source*\n" + "\n".join(
+            f"*{r['site_label']}* — {_n(r['ftd'])} FTD · {util.eur(r['deposit'])}" for r in d["by_source"])))
+    if d["by_brand"]:
+        blocks.append(_section("🎰 *Brands*\n" + "\n".join(
+            f"*{_trunc(r['brand'])}* ({r['site_label']}) — {_n(r['ftd'])} FTD · {util.eur(r['deposit'])}"
+            for r in d["by_brand"])))
+    return blocks
 
 
 def render_pick(kind: str, name: str, pkey: str) -> dict:
@@ -217,18 +262,18 @@ def render_pick(kind: str, name: str, pkey: str) -> dict:
 
 
 # --- overview ----------------------------------------------------------------
-def _overview(start: str, end: str, label: str) -> list[dict]:
+def _overview(start: str, end: str, label: str, order_by: str | None = None) -> list[dict]:
     tot = store.grand_total(start, end)
-    src = [r for r in store.totals_by_source(start, end) if r["ftd"] or r["signups"]]
+    src = [r for r in store.totals_by_source(start, end, order_by) if r["ftd"] or r["signups"]]
     blocks = [
         _section(f"📊 *FTD — {label}*\n"
                  f"{_n(tot['ftd'])} FTD · {util.eur(tot['deposit_value'])} · {_n(tot['signups'])} signups"),
         _section("🌍 *By source*\n" + _rows(src, _row_source, "no data yet")),
-        _section("🏆 *Brands*\n" + _rows(store.top_brands(start, end, 5), _row_brand, "no FTDs yet")),
+        _section("🏆 *Brands*\n" + _rows(store.top_brands(start, end, 5, order_by), _row_brand, "no FTDs yet")),
     ]
     if config.TRACKER_SITES:
         blocks.append(_section("🎯 *Trackers*\n"
-                               + _rows(store.tracker_leaderboard(start, end, 5), _row_tracker, "no tracker data yet")))
+                               + _rows(store.tracker_leaderboard(start, end, 5, order_by), _row_tracker, "no tracker data yet")))
     return blocks
 
 
@@ -345,6 +390,13 @@ def handle(text: str, with_panel: bool = True) -> dict:
             start, end, label = util.parse_period(period_text)
             view = "sources"
             blocks = _source_blocks(parts[1], start, end, label)
+    elif sub == "now":
+        minutes = 60
+        if len(parts) > 1 and parts[1].isdigit():
+            minutes = max(5, int(parts[1]))
+        start, end, label = util.parse_period("today")
+        view, period_text = "overview", "today"
+        blocks = _now_blocks(minutes)
     elif sub == "conv":
         period_text = " ".join(parts[1:])
         start, end, label = util.parse_period(period_text)
@@ -380,4 +432,6 @@ def action_to_response(value: str) -> dict:
         return handle(pk if view == "overview" else f"{view} {pk}")
     if p[0] == "pk" and len(p) == 4:
         return render_pick(p[1], p[3], p[2])
+    if p[0] == "sort" and len(p) == 4:
+        return render_view(p[1], p[2], p[3])
     return handle("today")
