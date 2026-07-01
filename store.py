@@ -174,9 +174,8 @@ def totals_by_source(start: str, end: str) -> list[dict]:
     return [dict(r) for r in cur.fetchall()]
 
 
-def top_brands(start: str, end: str, limit: int = 10) -> list[dict]:
-    c = conn()
-    cur = c.execute("""
+def top_brands(start: str, end: str, limit: int | None = 10) -> list[dict]:
+    q = """
         SELECT brand,
                site_label,
                SUM(ftd)           AS ftd,
@@ -185,11 +184,14 @@ def top_brands(start: str, end: str, limit: int = 10) -> list[dict]:
         FROM brand_daily
         WHERE date BETWEEN ? AND ?
         GROUP BY brand, site_label
-        HAVING SUM(ftd) > 0
+        HAVING SUM(ftd) > 0 OR SUM(signups) > 0
         ORDER BY ftd DESC, signups DESC
-        LIMIT ?
-    """, (start, end, limit))
-    return [dict(r) for r in cur.fetchall()]
+    """
+    params = [start, end]
+    if limit is not None:
+        q += " LIMIT ?"
+        params.append(limit)
+    return [dict(r) for r in conn().execute(q, params).fetchall()]
 
 
 def grand_total(start: str, end: str) -> dict:
@@ -302,8 +304,8 @@ def tracker_grand_total(start: str, end: str) -> dict:
     return {"ftd": r["ftd"], "signups": r["signups"]}
 
 
-def tracker_leaderboard(start: str, end: str, limit: int = 10) -> list[dict]:
-    cur = conn().execute("""
+def tracker_leaderboard(start: str, end: str, limit: int | None = 10) -> list[dict]:
+    q = """
         SELECT campaign, site_label, MAX(brand) AS brand,
                SUM(ftd) AS ftd, SUM(signups) AS signups
         FROM tracker_daily
@@ -311,9 +313,12 @@ def tracker_leaderboard(start: str, end: str, limit: int = 10) -> list[dict]:
         GROUP BY campaign, site_label
         HAVING SUM(ftd) > 0 OR SUM(signups) > 0
         ORDER BY ftd DESC, signups DESC
-        LIMIT ?
-    """, (start, end, limit))
-    return [dict(r) for r in cur.fetchall()]
+    """
+    params = [start, end]
+    if limit is not None:
+        q += " LIMIT ?"
+        params.append(limit)
+    return [dict(r) for r in conn().execute(q, params).fetchall()]
 
 
 def tracker_search(query: str, start: str, end: str, limit: int = 25) -> list[dict]:

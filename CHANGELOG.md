@@ -54,3 +54,13 @@ process (background poll thread + FastAPI).
   source), `/ftd conv [period]` (signup→FTD conversion by source).
 - Tracker rows now store their **brand** (advertiser), enabling the per-brand
   tracker view. Historical tracker rows get brands as they're re-scraped.
+
+## v1.3 — full lists
+- `/ftd trackers [period] all` (and `/ftd brands … all`) list EVERY tracker/brand
+  with activity (FTD or signups) for the period, not just the top N. Add a number
+  instead of `all` for a custom cap, e.g. `/ftd trackers month 100`.
+- Long lists are split across multiple Slack blocks (each under the 3000-char
+  limit); header shows how many have activity; overflow beyond ~12 blocks is
+  noted so nothing silently disappears.
+- Brand/tracker leaderboards now include signup-only rows (activity = FTD OR
+  signups); pure 0/0 rows stay excluded.

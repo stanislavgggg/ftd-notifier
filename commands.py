@@ -23,6 +23,7 @@ HELP = (
     "*FTD bot*\n"
     "`/ftd [today|yesterday|week|month|30d|july …]` — overview\n"
     "`/ftd sources [period]` · `/ftd brands [period]` · `/ftd trackers [period]` — leaderboards\n"
+    "   add `all` (or a number) for the full list, e.g. `/ftd trackers month all`\n"
     "`/ftd brand <name> [period]` — one advertiser: by source + top trackers\n"
     "`/ftd source <MAIL|META|COM> [period]` — one source: brands + trackers\n"
     "`/ftd tracker <name> [period]` — one tracker (e.g. `/ftd tracker LG week`)\n"
@@ -42,6 +43,57 @@ def _trunc(s: str, n: int = 26) -> str:
 
 def _conv_pct(ftd: int, su: int) -> str:
     return f" · {ftd / su * 100:.0f}% conv" if su else ""
+
+
+def _split_modifier(tokens: list[str], default: int = 10) -> tuple[str, int | None]:
+    """Pull a trailing 'all'/'full'/'все' or a number off the args and treat it
+    as a row-limit modifier. Returns (period_text, limit) where limit is None for
+    'all'. Everything before it is the period. e.g.
+      ['week','all'] -> ('week', None)   ['month','50'] -> ('month', 50)
+      ['week']       -> ('week', 10)     []             -> ('', 10)"""
+    toks = list(tokens)
+    limit: int | None = default
+    if toks:
+        last = toks[-1].lower()
+        if last in ("all", "full", "все", "всё"):
+            limit = None
+            toks = toks[:-1]
+        elif last.isdigit():
+            limit = max(1, int(last))
+            toks = toks[:-1]
+    return " ".join(toks), limit
+
+
+def _medal(i: int) -> str:
+    return ["🥇", "🥈", "🥉"][i] if i < 3 else f"{i+1}."
+
+
+def _chunk_blocks(header: str, lines: list[str], per_chars: int = 2700,
+                  max_blocks: int = 12) -> list[dict]:
+    """Render a long list across multiple section blocks (Slack caps a section at
+    ~3000 chars and a message at 50 blocks). The header sits atop the first block;
+    if the list overflows max_blocks it's truncated with a note."""
+    if not lines:
+        return [_section(header + "\n_nothing with activity in this period_")]
+    blocks: list[dict] = []
+    buf, buf_len = header + "\n", len(header) + 1
+    truncated = 0
+    for idx, ln in enumerate(lines):
+        add = ln + "\n"
+        if buf_len + len(add) > per_chars:
+            blocks.append(_section(buf.rstrip()))
+            if len(blocks) >= max_blocks:
+                truncated = len(lines) - idx
+                break
+            buf, buf_len = "", 0
+        buf += add
+        buf_len += len(add)
+    if buf.strip() and (not truncated):
+        blocks.append(_section(buf.rstrip()))
+    if truncated:
+        blocks.append(_section(f"_…and {truncated} more. Narrow the period or add a "
+                               f"number, e.g. `100`._"))
+    return blocks
 
 
 # --- line builders -----------------------------------------------------------
@@ -177,14 +229,29 @@ def handle(text: str) -> dict:
         start, end, label = util.parse_period(" ".join(parts[1:]))
         blocks = [_section(f"📈 *Sources — {label}*\n" + _sources_lines(start, end))]
     elif sub == "brands":
-        start, end, label = util.parse_period(" ".join(parts[1:]))
-        blocks = [_section(f"🏆 *Brands — {label}*\n" + _brands_lines(start, end, 10))]
+        period, limit = _split_modifier(parts[1:])
+        start, end, label = util.parse_period(period)
+        rows = store.top_brands(start, end, limit)
+        tot = store.grand_total(start, end)
+        head = (f"🏆 *Brands — {label}*  ·  {len(rows)} with activity\n"
+                f"Total: *{int(tot['ftd'])} FTD* · {util.eur(tot['deposit_value'])}"
+                f" · {int(tot['signups'])} signups")
+        lines = [f"{_medal(i)} *{_trunc(r['brand'])}* ({r['site_label']}) — "
+                 f"{int(r['ftd'])} FTD · {util.eur(r['deposit_value'])}"
+                 f" · {int(r['signups'])} signups" for i, r in enumerate(rows)]
+        blocks = _chunk_blocks(head, lines)
     elif sub == "trackers":
-        start, end, label = util.parse_period(" ".join(parts[1:]))
+        period, limit = _split_modifier(parts[1:])
+        start, end, label = util.parse_period(period)
+        rows = store.tracker_leaderboard(start, end, limit)
         tot = store.tracker_grand_total(start, end)
-        head = (f"📊 *Trackers — {label}*\n"
+        scope = "All" if limit is None else "Top"
+        head = (f"📊 *{scope} trackers — {label}*  ·  {len(rows)} with activity\n"
                 f"Total: *{int(tot['ftd'])} FTD* · {int(tot['signups'])} signups")
-        blocks = [_section(head), _section(_trackers_lines(start, end, 10))]
+        lines = [f"{_medal(i)} *{_trunc(r['campaign'])}*{_trk_site(r)} — "
+                 f"{int(r['ftd'])} FTD · {int(r['signups'])} signups"
+                 for i, r in enumerate(rows)]
+        blocks = _chunk_blocks(head, lines)
     elif sub == "brand":
         if len(parts) < 2:
             blocks = [_section("Usage: `/ftd brand <name> [period]` — e.g. `/ftd brand iWild week`")]
